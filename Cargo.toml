@@ -1,0 +1,22 @@
+[package]
+name = "async-fetcher"
+version = "0.1.0"
+authors = ["Michael Aaron Murphy <mmstickman@gmail.com>"]
+description = "Asynchronous file fetcher with optional fetching based on modified times"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+chrono = "0.4.6"
+filetime = "0.2.4"
+futures = "0.1.25"
+log = "0.4.6"
+reqwest = "0.9.5"
+tokio = "0.1.13"
+
+# Fix build for 1.28.0
+encoding_rs = "=0.8.9"
+
+[dev-dependencies]
+xz2 = "0.1.6"
+flate2 = "1.0.5"
