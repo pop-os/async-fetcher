@@ -51,38 +51,49 @@ pub fn main() {
     let client = Arc::new(Client::new());
 
     // Construct an iterator of futures for fetching our files.
-    let future_iterator = files.into_iter().map(move |(url, fetched_sha256, dest_sha256, dest)| {
-        // Store the fetched file into a temporary location.
-        let temporary = [&dest, ".partial"].concat();
+    let future_iterator = files
+        .into_iter()
+        .map(move |(url, fetched_sha256, dest_sha256, dest)| {
+            // Store the fetched file into a temporary location.
+            let temporary = [&dest, ".partial"].concat();
 
-        // Ensure the checksums survive for the duration of the future.
-        let fetched_checksum: Arc<str> = Arc::from(fetched_sha256);
-        let dest_checksum: Arc<str> = Arc::from(dest_sha256);
+            // Ensure the checksums survive for the duration of the future.
+            let fetched_checksum: Arc<str> = Arc::from(fetched_sha256);
+            let dest_checksum: Arc<str> = Arc::from(dest_sha256);
 
-        // Construct a future which will download our file. Note that what is being constructed is
-        // a future, which means that no computations are being formed here. A data structure is
-        // being created, which stores all of the state required for the computation, as well as
-        // the instructions to be executed with that state.
-        let request = AsyncFetcher::new(&client, url.clone())
-            // Specify the destination path where a source file may already exist.
-            // The destination will have the checksum verified.
-            .request_with_checksum_to_path::<Sha256>(dest.into(), dest_checksum)
-            // Download the file to this temporary path (to prevent overwriting a good file).
-            .then_download(temporary.into())
-            // Validate the checksum of the fetched file against Sha256
-            .with_checksum::<Sha256>(fetched_checksum);
+            // Construct a future which will download our file. Note that what is being constructed is
+            // a future, which means that no computations are being formed here. A data structure is
+            // being created, which stores all of the state required for the computation, as well as
+            // the instructions to be executed with that state.
+            let request = AsyncFetcher::new(&client, url.clone())
+                // Specify the destination path where a source file may already exist.
+                // The destination will have the checksum verified.
+                .request_with_checksum_to_path::<Sha256>(dest.into(), dest_checksum.clone())
+                // Download the file to this temporary path (to prevent overwriting a good file).
+                .then_download(temporary.into())
+                // Validate the checksum of the fetched file against Sha256
+                .with_checksum::<Sha256>(fetched_checksum);
 
-        // Dynamically choose the correct decompressor for the given file.
-        let future: Box<dyn Future<Item = (), Error = io::Error> + Send> = if url.ends_with(".xz") {
-            Box::new(request.then_process(move |file| Box::new(XzDecoder::new(file))))
-        } else if url.ends_with(".gz") {
-            Box::new(request.then_process(move |file| Box::new(GzDecoder::new(file))))
-        } else {
-            Box::new(request.then_rename())
-        };
+            // Dynamically choose the correct decompressor for the given file.
+            let future: Box<dyn Future<Item = (), Error = io::Error> + Send> =
+                if url.ends_with(".xz") {
+                    Box::new(
+                        request
+                            .then_process(move |file| Box::new(XzDecoder::new(file)))
+                            .with_destination_checksum::<Sha256>(dest_checksum),
+                    )
+                } else if url.ends_with(".gz") {
+                    Box::new(
+                        request
+                            .then_process(move |file| Box::new(GzDecoder::new(file)))
+                            .with_destination_checksum::<Sha256>(dest_checksum),
+                    )
+                } else {
+                    Box::new(request.then_rename().future)
+                };
 
-        future
-    });
+            future
+        });
 
     // Join the iterator of futures into a single future for our runtime.
     let joined = futures::future::join_all(future_iterator);

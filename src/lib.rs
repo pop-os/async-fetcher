@@ -249,50 +249,58 @@ impl FetchedState {
     }
 
     /// Replaces and renames the fetched file, then sets the file times.
-    pub fn then_rename(self) -> impl Future<Item = (), Error = io::Error> + Send {
+    pub fn then_rename(self) -> CompletedState<impl Future<Item = (), Error = io::Error> + Send> {
         let partial = self.download_location;
         let dest = self.final_destination;
         let dest_copy = dest.clone();
 
-        self.future
-            .and_then(move |ftime| {
-                let requires_rename = ftime.is_some();
+        let future = {
+            let dest = dest.clone();
+            self.future
+                .and_then(move |ftime| {
+                    let requires_rename = ftime.is_some();
 
-                // Remove the original file and rename, if required.
-                let rename_future: Box<
-                    dyn Future<Item = (), Error = io::Error> + Send,
-                > = {
-                    if requires_rename && partial != dest {
-                        if dest.exists() {
-                            debug!("replacing {} with {}", dest.display(), partial.display());
-                            let future =
-                                remove_file(dest.clone()).and_then(move |_| rename(partial, dest));
-                            Box::new(future)
+                    // Remove the original file and rename, if required.
+                    let rename_future: Box<
+                        dyn Future<Item = (), Error = io::Error> + Send,
+                    > = {
+                        if requires_rename && partial != dest {
+                            if dest.exists() {
+                                debug!("replacing {} with {}", dest.display(), partial.display());
+                                let future = remove_file(dest.clone())
+                                    .and_then(move |_| rename(partial, dest));
+                                Box::new(future)
+                            } else {
+                                debug!("renaming {} to {}", partial.display(), dest.display());
+                                Box::new(rename(partial, dest))
+                            }
                         } else {
-                            debug!("renaming {} to {}", partial.display(), dest.display());
-                            Box::new(rename(partial, dest))
+                            Box::new(OkFuture(()))
                         }
-                    } else {
-                        Box::new(OkFuture(()))
-                    }
-                };
+                    };
 
-                rename_future.map(move |_| ftime)
-            })
-            .and_then(|ftime| {
-                futures::future::lazy(move || {
-                    if let Some(Some(ftime)) = ftime {
-                        debug!(
-                            "setting timestamp on {} to {:?}",
-                            dest_copy.as_ref().display(),
-                            ftime
-                        );
-                        filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)?;
-                    }
-
-                    Ok(())
+                    rename_future.map(move |_| ftime)
                 })
-            })
+                .and_then(|ftime| {
+                    futures::future::lazy(move || {
+                        if let Some(Some(ftime)) = ftime {
+                            debug!(
+                                "setting timestamp on {} to {:?}",
+                                dest_copy.as_ref().display(),
+                                ftime
+                            );
+                            filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)?;
+                        }
+
+                        Ok(())
+                    })
+                })
+        };
+
+        CompletedState {
+            future: Box::new(future),
+            destination: dest,
+        }
     }
 
     /// Processes the fetched file, storing the output to the destination, then setting the file times.
@@ -301,7 +309,7 @@ impl FetchedState {
     pub fn then_process<F>(
         self,
         construct_writer: F,
-    ) -> impl Future<Item = (), Error = io::Error> + Send
+    ) -> CompletedState<impl Future<Item = (), Error = io::Error> + Send>
     where
         F: Fn(SyncFile) -> Box<dyn Write + Send> + Send,
     {
@@ -309,44 +317,69 @@ impl FetchedState {
         let dest = self.final_destination;
         let dest_copy = dest.clone();
 
-        self.future
-            .and_then(move |ftime| {
-                let requires_processing = ftime.is_some();
+        let future = {
+            let dest = dest.clone();
+            self.future
+                .and_then(move |ftime| {
+                    let requires_processing = ftime.is_some();
 
-                let decompress_future = {
+                    let decompress_future = {
+                        futures::future::lazy(move || {
+                            if requires_processing {
+                                debug!("constructing decompressor for {}", dest.display());
+                                let file = SyncFile::create(dest.as_ref())?;
+                                let mut writer = construct_writer(file);
+
+                                debug!("processing to {}", dest.display());
+                                io::copy(&mut SyncFile::open(partial.as_ref())?, &mut writer)?;
+
+                                debug!("removing partial file at {}", partial.display());
+                                remove_file_sync(partial.as_ref())?;
+                            }
+
+                            Ok(())
+                        })
+                    };
+
+                    decompress_future.map(move |_| ftime)
+                })
+                .and_then(|ftime| {
                     futures::future::lazy(move || {
-                        if requires_processing {
-                            debug!("constructing decompressor for {}", dest.display());
-                            let file = SyncFile::create(dest.as_ref())?;
-                            let mut writer = construct_writer(file);
-
-                            debug!("processing to {}", dest.display());
-                            io::copy(&mut SyncFile::open(partial.as_ref())?, &mut writer)?;
-
-                            debug!("removing partial file at {}", partial.display());
-                            remove_file_sync(partial.as_ref())?;
+                        if let Some(Some(ftime)) = ftime {
+                            debug!(
+                                "setting timestamp on {} to {:?}",
+                                dest_copy.display(),
+                                ftime
+                            );
+                            filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)?;
                         }
 
                         Ok(())
                     })
-                };
-
-                decompress_future.map(move |_| ftime)
-            })
-            .and_then(|ftime| {
-                futures::future::lazy(move || {
-                    if let Some(Some(ftime)) = ftime {
-                        debug!(
-                            "setting timestamp on {} to {:?}",
-                            dest_copy.display(),
-                            ftime
-                        );
-                        filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)?;
-                    }
-
-                    Ok(())
                 })
-            })
+        };
+
+        CompletedState {
+            future: Box::new(future),
+            destination: dest,
+        }
+    }
+}
+
+pub struct CompletedState<T: Future<Item = (), Error = io::Error> + Send> {
+    pub future: T,
+    destination: Arc<Path>,
+}
+
+impl<T: Future<Item = (), Error = io::Error> + Send> CompletedState<T> {
+    pub fn with_destination_checksum<D: Digest>(
+        self,
+        checksum: Arc<str>,
+    ) -> impl Future<Item = (), Error = io::Error> + Send {
+        let destination = self.destination;
+        let future = self.future;
+
+        future.and_then(move |_| hash_from_path::<D>(&destination, &checksum))
     }
 }
 
@@ -382,7 +415,7 @@ fn check_response(
 }
 
 fn hash_from_path<D: Digest>(path: &Path, checksum: &str) -> io::Result<()> {
-    debug!("constructing hasher for {}", path.display());
+    trace!("constructing hasher for {}", path.display());
     let reader = SyncFile::open(path)?;
     hasher::<D, SyncFile>(reader, checksum)
 }
@@ -402,8 +435,8 @@ fn hasher<D: Digest, R: Read>(mut reader: R, checksum: &str) -> io::Result<()> {
 
     let result = hasher.result();
     let hash = format!("{:x}", HexView::from(result.as_slice()));
-    if hash == checksum.as_ref() {
-        debug!("checksum is valid");
+    if hash == checksum {
+        trace!("checksum is valid");
         Ok(())
     } else {
         debug!("invalid checksum found: {} != {}", hash, checksum);
