@@ -1,7 +1,19 @@
 //! Provides a high level abstraction over a reqwest async client for optionally fetching
-//! files from a given URL based on a timestamp comparison of the `LAST_MODIFIED` header
-//! and an existing local file; and optionally processing the fetched file before
-//! moving it into the final destination.
+//! files from a remote location when required, checking that the downloaded file is valid, and
+//! processing that downloaded file if processing is required (ie: decompression).
+//!
+//! # Features
+//!
+//! - Files will only be downloaded if the timestamp of the file is older than the timestamp on the server.
+//! - Or if the destination checksum does not match, if a checksum is provided.
+//! - Partial downloads will be stored at a temporary location, then renamed after completion.
+//! - The fetched files will have their file times modified to match that of the server they fetched from.
+//! - The checksum of the fetched file can be compared, as well as the checksum of the destination.
+//! - The caller may optionally process the fetched file into the destination.
+//! - Implemented as a state machine for creating requests. These can be converted to futures at any time:
+//!   - `AsyncFetcher` -> `ResponseState`
+//!   - `ResponseState` -> `FetchedState`
+//!   - `FetchedState` -> `CompletedState`
 //!
 //! # Notes
 //! - The generated futures are compatible with multi-threaded runtimes.
@@ -24,7 +36,7 @@ use futures::{future::ok as OkFuture, Future, Stream};
 use hex_view::HexView;
 use reqwest::{
     async::{Client, RequestBuilder, Response},
-    header::{CONTENT_LENGTH, IF_MODIFIED_SINCE, LAST_MODIFIED},
+    header::{IF_MODIFIED_SINCE, LAST_MODIFIED},
     StatusCode,
 };
 use std::{
@@ -35,10 +47,7 @@ use std::{
 };
 use tokio::fs::{remove_file, rename, File};
 
-/// Slightly opinionated asynchronous fetcher of files via an async reqwest Client.
-///
-/// - Files will only be downloaded if the timestamp of the file is older than the timestamp on the server.
-/// - Partial downloads may be stored at an optional temporary location, then renamed after completion.
+/// A future builder for creating futures to fetch files from an asynchronous reqwest client.
 pub struct AsyncFetcher<'a> {
     client: &'a Client,
     from_url: String,
@@ -53,10 +62,6 @@ impl<'a> AsyncFetcher<'a> {
     }
 
     /// Submit the GET request for the file, if the modified time is too old.
-    ///
-    /// If the `to_path` path already exists, the time of this file will be used with the
-    /// `IF_MODIFIED_SINCE` GET header when requesting the file. The server will respond with
-    /// `NOT_MODIFIED` if the file we want to fetch has already been fetched.
     ///
     /// Returns a `ResponseState`, which can either be manually handled by the caller, or used
     /// to commit the download with this API.
@@ -85,7 +90,7 @@ impl<'a> AsyncFetcher<'a> {
     pub fn request_with_checksum_to_path<D: Digest>(
         self,
         to_path: PathBuf,
-        checksum: Arc<str>,
+        checksum: &str,
     ) -> ResponseState<
         impl Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send,
     > {
@@ -139,8 +144,7 @@ impl<'a> AsyncFetcher<'a> {
     }
 }
 
-/// This state manages downloading a response into the download location, whether it is a
-/// temporary or final destination.
+/// This state manages downloading a response into the temporary location.
 pub struct ResponseState<
     T: Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error>
         + Send
@@ -156,6 +160,7 @@ impl<
             + 'static,
     > ResponseState<T>
 {
+    /// If the file is to be downloaded, this will construct a future that does just that.
     pub fn then_download(self, download_location: PathBuf) -> FetchedState {
         let final_destination = self.path;
         let future = self.future;
@@ -211,6 +216,9 @@ impl<
             final_destination: Arc::from(final_destination),
         }
     }
+
+    /// Convert this state into the future that it owns.
+    pub fn into_future(self) -> T { self.future }
 }
 
 /// This state manages renaming to the destination, and setting the timestamp of the fetched file.
@@ -364,10 +372,14 @@ impl FetchedState {
             destination: dest,
         }
     }
+
+    pub fn into_future(self) -> impl Future<Item = Option<Option<FileTime>>, Error = io::Error> + Send { self.future }
 }
 
+/// The state which signals that fetched file is now at the destination, and provides an optional
+/// checksum comparison method.
 pub struct CompletedState<T: Future<Item = (), Error = io::Error> + Send> {
-    pub future: T,
+    future: T,
     destination: Arc<Path>,
 }
 
@@ -381,6 +393,9 @@ impl<T: Future<Item = (), Error = io::Error> + Send> CompletedState<T> {
 
         future.and_then(move |_| hash_from_path::<D>(&destination, &checksum))
     }
+
+    /// Convert this state into the future that it owns.
+    pub fn into_future(self) -> T { self.future }
 }
 
 fn check_response(

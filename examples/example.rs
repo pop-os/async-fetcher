@@ -21,7 +21,7 @@ pub fn main() {
 
     let files: Vec<(String, &'static str, &'static str, String)> = vec![
         (
-            // Rhw URL to fetch the file from, if required.
+            // The URL to fetch the file from, if required.
             "http://apt.pop-os.org/proprietary/dists/cosmic/Contents-amd64.xz".into(),
             // The checksum of the file to be downloaded.
             "ed1c4d5b21086baa1dc98f912b5d52adaaeb248e35a9b27cd7e1f06a25781502",
@@ -68,7 +68,7 @@ pub fn main() {
             let request = AsyncFetcher::new(&client, url.clone())
                 // Specify the destination path where a source file may already exist.
                 // The destination will have the checksum verified.
-                .request_with_checksum_to_path::<Sha256>(dest.into(), dest_checksum.clone())
+                .request_with_checksum_to_path::<Sha256>(dest.into(), &dest_checksum)
                 // Download the file to this temporary path (to prevent overwriting a good file).
                 .then_download(temporary.into())
                 // Validate the checksum of the fetched file against Sha256
@@ -89,7 +89,7 @@ pub fn main() {
                             .with_destination_checksum::<Sha256>(dest_checksum),
                     )
                 } else {
-                    Box::new(request.then_rename().future)
+                    Box::new(request.then_rename().into_future())
                 };
 
             future
