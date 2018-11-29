@@ -1,6 +1,6 @@
 [package]
 name = "async-fetcher"
-version = "0.1.1-alpha.0"
+version = "0.1.1"
 repository = "https://github.com/pop-os/async-fetcher"
 authors = ["Michael Aaron Murphy <mmstickman@gmail.com>"]
 description = "Asynchronous file fetcher with optional fetching based on modified times and checksums"
@@ -21,6 +21,8 @@ tokio = "0.1.13"
 
 # Fix build for 1.28.0
 encoding_rs = "=0.8.9"
+failure = "0.1.3"
+failure_derive = "0.1.3"
 
 [dev-dependencies]
 flate2 = "1.0.5"

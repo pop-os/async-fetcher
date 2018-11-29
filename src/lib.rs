@@ -20,25 +20,36 @@
 //! - See the examples directory in the source repository for an example of it in practice.
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate failure_derive;
 
 extern crate chrono;
 extern crate digest;
+extern crate failure;
 extern crate filetime;
 extern crate futures;
 extern crate hex_view;
 extern crate reqwest;
 extern crate tokio;
 
+mod errors;
+mod hashing;
+mod states;
+
 use chrono::{DateTime, Utc};
 use digest::Digest;
+pub use errors::*;
+use failure::ResultExt;
 use filetime::FileTime;
 use futures::{future::ok as OkFuture, Future, Stream};
+use hashing::*;
 use hex_view::HexView;
 use reqwest::{
     async::{Client, RequestBuilder, Response},
     header::{IF_MODIFIED_SINCE, LAST_MODIFIED},
     StatusCode,
 };
+pub use states::*;
 use std::{
     fs::{remove_file as remove_file_sync, File as SyncFile},
     io::{self, Read, Write},
@@ -124,12 +135,6 @@ impl<'a> AsyncFetcher<'a> {
         let date = if to_path.exists() {
             let when = self.date_time(&to_path).unwrap();
             let rfc = when.to_rfc2822();
-            debug!(
-                "Setting IF_MODIFIED_SINCE header for {} to {}",
-                to_path.display(),
-                rfc
-            );
-
             req = req.header(IF_MODIFIED_SINCE, rfc);
             Some(when)
         } else {
@@ -142,260 +147,6 @@ impl<'a> AsyncFetcher<'a> {
     fn date_time(&self, to_path: &Path) -> io::Result<DateTime<Utc>> {
         Ok(DateTime::from(to_path.metadata()?.modified()?))
     }
-}
-
-/// This state manages downloading a response into the temporary location.
-pub struct ResponseState<
-    T: Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error>
-        + Send
-        + 'static,
-> {
-    pub future: T,
-    pub path: PathBuf,
-}
-
-impl<
-        T: Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error>
-            + Send
-            + 'static,
-    > ResponseState<T>
-{
-    /// If the file is to be downloaded, this will construct a future that does just that.
-    pub fn then_download(self, download_location: PathBuf) -> FetchedState {
-        let final_destination = self.path;
-        let future = self.future;
-
-        // Fetch the file to the download location.
-        let download_location_ = download_location.clone();
-        let download_future = future
-            .map_err(|why| {
-                io::Error::new(io::ErrorKind::Other, format!("async fetch failed: {}", why))
-            })
-            .and_then(move |resp| {
-                let future: Box<
-                    dyn Future<Item = Option<Option<FileTime>>, Error = io::Error> + Send,
-                > = match resp {
-                    None => Box::new(OkFuture(None)),
-                    Some((resp, date)) => {
-                        // TODO: Use this to set length of async file.
-                        // let length = resp
-                        //     .headers()
-                        //     .get(CONTENT_LENGTH)
-                        //     .and_then(|h| h.to_str().ok())
-                        //     .and_then(|h| h.parse::<usize>().ok())
-                        //     .unwrap_or(0);
-
-                        let future = File::create(download_location_.clone()).and_then(
-                            move |mut file| {
-                                debug!("downloading to {}", download_location_.display());
-                                resp.into_body()
-                                    .map_err(|why| io::Error::new(
-                                        io::ErrorKind::Other,
-                                        format!("async I/O write error: {}", why)
-                                    ))
-                                    // Attempt to write each chunk to our file.
-                                    .for_each(move |chunk| {
-                                        file.write_all(chunk.as_ref())
-                                            .map(|_| ())
-                                    })
-                                    // On success, we will return the filetime to assign to the destionation.
-                                    .map(move |_| Some(date.map(|date| FileTime::from_unix_time(date.timestamp(), 0))))
-                            },
-                        );
-
-                        Box::new(future)
-                    }
-                };
-
-                future
-            });
-
-        FetchedState {
-            future: Box::new(download_future),
-            download_location: Arc::from(download_location),
-            final_destination: Arc::from(final_destination),
-        }
-    }
-
-    /// Convert this state into the future that it owns.
-    pub fn into_future(self) -> T { self.future }
-}
-
-/// This state manages renaming to the destination, and setting the timestamp of the fetched file.
-pub struct FetchedState {
-    pub future: Box<dyn Future<Item = Option<Option<FileTime>>, Error = io::Error> + Send>,
-    pub download_location: Arc<Path>,
-    pub final_destination: Arc<Path>,
-}
-
-impl FetchedState {
-    /// Apply a `Digest`-able hash method to the downloaded file, and compare the checksum to the
-    /// given input.
-    pub fn with_checksum<H: Digest>(self, checksum: Arc<str>) -> Self {
-        let download_location = self.download_location;
-        let final_destination = self.final_destination;
-
-        // Simply "enhance" our future to append an extra action.
-        let new_future = {
-            let download_location = download_location.clone();
-            self.future.and_then(|resp| {
-                futures::future::lazy(move || {
-                    if resp.is_none() {
-                        return Ok(resp);
-                    }
-
-                    hash_from_path::<H>(&download_location, &checksum).map(move |_| resp)
-                })
-            })
-        };
-
-        Self {
-            future: Box::new(new_future),
-            download_location: download_location,
-            final_destination: final_destination,
-        }
-    }
-
-    /// Replaces and renames the fetched file, then sets the file times.
-    pub fn then_rename(self) -> CompletedState<impl Future<Item = (), Error = io::Error> + Send> {
-        let partial = self.download_location;
-        let dest = self.final_destination;
-        let dest_copy = dest.clone();
-
-        let future = {
-            let dest = dest.clone();
-            self.future
-                .and_then(move |ftime| {
-                    let requires_rename = ftime.is_some();
-
-                    // Remove the original file and rename, if required.
-                    let rename_future: Box<
-                        dyn Future<Item = (), Error = io::Error> + Send,
-                    > = {
-                        if requires_rename && partial != dest {
-                            if dest.exists() {
-                                debug!("replacing {} with {}", dest.display(), partial.display());
-                                let future = remove_file(dest.clone())
-                                    .and_then(move |_| rename(partial, dest));
-                                Box::new(future)
-                            } else {
-                                debug!("renaming {} to {}", partial.display(), dest.display());
-                                Box::new(rename(partial, dest))
-                            }
-                        } else {
-                            Box::new(OkFuture(()))
-                        }
-                    };
-
-                    rename_future.map(move |_| ftime)
-                })
-                .and_then(|ftime| {
-                    futures::future::lazy(move || {
-                        if let Some(Some(ftime)) = ftime {
-                            debug!(
-                                "setting timestamp on {} to {:?}",
-                                dest_copy.as_ref().display(),
-                                ftime
-                            );
-                            filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)?;
-                        }
-
-                        Ok(())
-                    })
-                })
-        };
-
-        CompletedState {
-            future: Box::new(future),
-            destination: dest,
-        }
-    }
-
-    /// Processes the fetched file, storing the output to the destination, then setting the file times.
-    ///
-    /// Use this to decompress an archive if the fetched file was an archive.
-    pub fn then_process<F>(
-        self,
-        construct_writer: F,
-    ) -> CompletedState<impl Future<Item = (), Error = io::Error> + Send>
-    where
-        F: Fn(SyncFile) -> Box<dyn Write + Send> + Send,
-    {
-        let partial = self.download_location;
-        let dest = self.final_destination;
-        let dest_copy = dest.clone();
-
-        let future = {
-            let dest = dest.clone();
-            self.future
-                .and_then(move |ftime| {
-                    let requires_processing = ftime.is_some();
-
-                    let decompress_future = {
-                        futures::future::lazy(move || {
-                            if requires_processing {
-                                debug!("constructing decompressor for {}", dest.display());
-                                let file = SyncFile::create(dest.as_ref())?;
-                                let mut writer = construct_writer(file);
-
-                                debug!("processing to {}", dest.display());
-                                io::copy(&mut SyncFile::open(partial.as_ref())?, &mut writer)?;
-
-                                debug!("removing partial file at {}", partial.display());
-                                remove_file_sync(partial.as_ref())?;
-                            }
-
-                            Ok(())
-                        })
-                    };
-
-                    decompress_future.map(move |_| ftime)
-                })
-                .and_then(|ftime| {
-                    futures::future::lazy(move || {
-                        if let Some(Some(ftime)) = ftime {
-                            debug!(
-                                "setting timestamp on {} to {:?}",
-                                dest_copy.display(),
-                                ftime
-                            );
-                            filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)?;
-                        }
-
-                        Ok(())
-                    })
-                })
-        };
-
-        CompletedState {
-            future: Box::new(future),
-            destination: dest,
-        }
-    }
-
-    pub fn into_future(self) -> impl Future<Item = Option<Option<FileTime>>, Error = io::Error> + Send { self.future }
-}
-
-/// The state which signals that fetched file is now at the destination, and provides an optional
-/// checksum comparison method.
-pub struct CompletedState<T: Future<Item = (), Error = io::Error> + Send> {
-    future: T,
-    destination: Arc<Path>,
-}
-
-impl<T: Future<Item = (), Error = io::Error> + Send> CompletedState<T> {
-    pub fn with_destination_checksum<D: Digest>(
-        self,
-        checksum: Arc<str>,
-    ) -> impl Future<Item = (), Error = io::Error> + Send {
-        let destination = self.destination;
-        let future = self.future;
-
-        future.and_then(move |_| hash_from_path::<D>(&destination, &checksum))
-    }
-
-    /// Convert this state into the future that it owns.
-    pub fn into_future(self) -> T { self.future }
 }
 
 fn check_response(
@@ -426,38 +177,5 @@ fn check_response(
             debug!("{} was already fetched", url);
             None
         }
-    }
-}
-
-fn hash_from_path<D: Digest>(path: &Path, checksum: &str) -> io::Result<()> {
-    trace!("constructing hasher for {}", path.display());
-    let reader = SyncFile::open(path)?;
-    hasher::<D, SyncFile>(reader, checksum)
-}
-
-fn hasher<D: Digest, R: Read>(mut reader: R, checksum: &str) -> io::Result<()> {
-    let mut buffer = [0u8; 8 * 1024];
-    let mut hasher = D::new();
-
-    loop {
-        let read = reader.read(&mut buffer)?;
-
-        if read == 0 {
-            break;
-        }
-        hasher.input(&buffer[..read]);
-    }
-
-    let result = hasher.result();
-    let hash = format!("{:x}", HexView::from(result.as_slice()));
-    if hash == checksum {
-        trace!("checksum is valid");
-        Ok(())
-    } else {
-        debug!("invalid checksum found: {} != {}", hash, checksum);
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid checksum",
-        ))
     }
 }

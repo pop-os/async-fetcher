@@ -7,7 +7,7 @@ extern crate sha2;
 extern crate tokio;
 extern crate xz2;
 
-use async_fetcher::AsyncFetcher;
+use async_fetcher::{AsyncFetcher, FetchError};
 use flate2::write::GzDecoder;
 use futures::Future;
 use reqwest::async::Client;
@@ -75,17 +75,17 @@ pub fn main() {
                 .with_checksum::<Sha256>(fetched_checksum);
 
             // Dynamically choose the correct decompressor for the given file.
-            let future: Box<dyn Future<Item = (), Error = io::Error> + Send> =
+            let future: Box<dyn Future<Item = (), Error = FetchError> + Send> =
                 if url.ends_with(".xz") {
                     Box::new(
                         request
-                            .then_process(move |file| Box::new(XzDecoder::new(file)))
+                            .then_process(move |file| Ok(Box::new(XzDecoder::new(file))))
                             .with_destination_checksum::<Sha256>(dest_checksum),
                     )
                 } else if url.ends_with(".gz") {
                     Box::new(
                         request
-                            .then_process(move |file| Box::new(GzDecoder::new(file)))
+                            .then_process(move |file| Ok(Box::new(GzDecoder::new(file))))
                             .with_destination_checksum::<Sha256>(dest_checksum),
                     )
                 } else {
