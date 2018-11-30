@@ -18,7 +18,11 @@ impl Fail for FetchError {
 
 impl Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        Display::fmt(&self.inner, f)
+        Display::fmt(&self.inner, f)?;
+        for cause in Fail::iter_causes(self) {
+            let _ = write!(f, ": {}", cause);
+        }
+        Ok(())
     }
 }
 
