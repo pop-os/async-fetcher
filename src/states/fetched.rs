@@ -11,7 +11,7 @@ use std::{
     sync::Arc,
 };
 use tokio::fs::{remove_file, rename};
-use FetchError;
+use {FetchError, FetchErrorKind};
 
 /// This state manages renaming to the destination, and setting the timestamp of the fetched file.
 pub struct FetchedState {
@@ -36,12 +36,8 @@ impl FetchedState {
                         return Ok(resp);
                     }
 
-                    hash_from_path::<H>(&download_location, &checksum).with_context(|why| {
-                        format!(
-                            "failed to validate hash at {}: {}",
-                            download_location.display(),
-                            why
-                        )
+                    hash_from_path::<H>(&download_location, &checksum).map_err(|why| {
+                        why.context(FetchErrorKind::DestinationHash(download_location.to_path_buf()))
                     })?;
 
                     Ok(resp)
@@ -77,31 +73,26 @@ impl FetchedState {
                                 let d1 = dest.clone();
                                 let future = remove_file(dest.clone())
                                     .map_err(move |why| {
-                                        let desc = format!("failed to remove {}", d1.display());
-                                        FetchError::from(why.context(desc))
+                                        FetchError::from(why.context(FetchErrorKind::Remove(d1.to_path_buf())))
                                     })
                                     .and_then(move |_| {
                                         rename(partial.clone(), dest.clone()).map_err(move |why| {
-                                            let desc = format!(
-                                                "failed to rename {} to {}",
-                                                partial.display(),
-                                                dest.display()
-                                            );
-                                            FetchError::from(why.context(desc))
-                                        })
+                                            why.context(FetchErrorKind::Rename {
+                                                src: partial.to_path_buf(),
+                                                dst: dest.to_path_buf()
+                                            })
+                                        }).map_err(FetchError::from)
                                     });
 
                                 Box::new(future)
                             } else {
                                 let future =
                                     rename(partial.clone(), dest.clone()).map_err(move |why| {
-                                        let desc = format!(
-                                            "failed to rename {} to {}",
-                                            partial.display(),
-                                            dest.display()
-                                        );
-                                        FetchError::from(why.context(desc))
-                                    });
+                                        why.context(FetchErrorKind::Rename {
+                                            src: partial.to_path_buf(),
+                                            dst: dest.to_path_buf()
+                                        })
+                                    }).map_err(FetchError::from);
 
                                 Box::new(future)
                             }
@@ -122,13 +113,9 @@ impl FetchedState {
                             );
 
                             filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)
-                                .with_context(|why| {
-                                    format!(
-                                        "failed to set file times for {}: {}",
-                                        dest_copy.display(),
-                                        why
-                                    )
-                                })?;
+                                .map_err(|why| FetchError::from(
+                                    why.context(FetchErrorKind::FileTime(dest_copy.to_path_buf()))
+                                ))?;
                         }
 
                         Ok(())
@@ -166,50 +153,40 @@ impl FetchedState {
                         futures::future::lazy(move || {
                             if requires_processing {
                                 debug!("constructing decompressor for {}", dest.display());
-                                let file = SyncFile::create(dest.as_ref()).with_context(|why| {
-                                    format!(
-                                        "failed to create destination file ({}): {}",
-                                        dest.display(),
-                                        why
-                                    )
+                                let file = SyncFile::create(dest.as_ref()).map_err(|why| {
+                                    FetchError::from(why.context(FetchErrorKind::CreateDestination(
+                                        dest.to_path_buf()
+                                    )))
                                 })?;
 
-                                let mut destination = construct_writer(file).with_context(|why| {
-                                    format!(
-                                        "failed to construct writer for destination ({}): {}",
-                                        dest.display(),
-                                        why
-                                    )
+                                let mut destination = construct_writer(file).map_err(|why| {
+                                    FetchError::from(why.context(FetchErrorKind::WriterConstruction(
+                                        dest.to_path_buf()
+                                    )))
                                 })?;
 
                                 let mut partial_file = SyncFile::open(partial.as_ref())
-                                    .with_context(|why| {
-                                        format!(
-                                            "failed to open partial file ({}): {}",
-                                            partial.display(),
-                                            why
-                                        )
+                                    .map_err(|why| {
+                                        FetchError::from(why.context(FetchErrorKind::Open(
+                                            partial.to_path_buf()
+                                        )))
                                     })?;
 
                                 debug!("processing to {}", dest.display());
-                                io::copy(&mut partial_file, &mut destination).with_context(
+                                io::copy(&mut partial_file, &mut destination).map_err(
                                     |why| {
-                                        format!(
-                                            "failed to copy {} to {}: {}",
-                                            partial.display(),
-                                            dest.display(),
-                                            why
-                                        )
+                                        FetchError::from(why.context(FetchErrorKind::Copy {
+                                            src: partial.to_path_buf(),
+                                            dst: dest.to_path_buf()
+                                        }))
                                     },
                                 )?;
 
                                 debug!("removing partial file at {}", partial.display());
-                                remove_file_sync(partial.as_ref()).with_context(|why| {
-                                    format!(
-                                        "failed to remove file at {}: {}",
-                                        partial.display(),
-                                        why
-                                    )
+                                remove_file_sync(partial.as_ref()).map_err(|why| {
+                                    FetchError::from(why.context(FetchErrorKind::Remove(
+                                        partial.to_path_buf()
+                                    )))
                                 })?;
                             }
 
@@ -229,12 +206,10 @@ impl FetchedState {
                             );
 
                             filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)
-                                .with_context(|why| {
-                                    format!(
-                                        "failed to set file times for {}: {}",
-                                        dest_copy.display(),
-                                        why
-                                    )
+                                .map_err(|why| {
+                                    FetchError::from(why.context(FetchErrorKind::FileTime(
+                                        dest_copy.to_path_buf()
+                                    )))
                                 })?;
                         }
 

@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
 };
 use tokio::fs::File;
-use FetchError;
+use {FetchError, FetchErrorKind};
 
 /// This state manages downloading a response into the temporary location.
 pub struct ResponseState<
@@ -39,8 +39,7 @@ impl<
         let dl2 = download_location_.clone();
         let download_future = future
             .map_err(move |why| {
-                let desc = format!("async fetch for {} failed", dl1.display());
-                FetchError::from(why.context(desc))
+                FetchError::from(why.context(FetchErrorKind::Fetch(dl1.to_path_buf())))
             })
             .and_then(move |resp| {
                 let future: Box<
@@ -58,23 +57,20 @@ impl<
 
                         let future = File::create(download_location_.clone())
                             .map_err(move |why| {
-                                let desc = format!("failed to create file at {}", dl2.display());
-                                FetchError::from(why.context(desc))
+                                FetchError::from(why.context(FetchErrorKind::Create(dl2.to_path_buf())))
                             })
                             .and_then(move |mut file| {
                                 debug!("downloading to {}", download_location_.display());
                                 resp.into_body()
                                         .map_err(|why| {
-                                            let desc = "async I/O write error";
-                                            FetchError::from(why.context(desc))
+                                            FetchError::from(why.context(FetchErrorKind::ChunkRequest))
                                         })
                                         // Attempt to write each chunk to our file.
                                         .for_each(move |chunk| {
                                             file.write_all(chunk.as_ref())
                                                 .map(|_| ())
                                                 .map_err(|why| {
-                                                    let desc = "async I/O write error";
-                                                    FetchError::from(why.context(desc))
+                                                    FetchError::from(why.context(FetchErrorKind::ChunkWrite))
                                                 })
                                         })
                                         // On success, we will return the filetime to assign to the destionation.

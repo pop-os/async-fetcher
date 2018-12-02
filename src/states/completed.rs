@@ -1,10 +1,9 @@
 use digest::Digest;
-use failure::ResultExt;
-use filetime;
-use futures::{self, Future, Stream};
+use failure::{Context, Fail, ResultExt};
+use futures::{Future, Stream};
 use hashing::hash_from_path;
 use std::{path::Path, sync::Arc};
-use FetchError;
+use {FetchError, FetchErrorKind};
 
 /// The state which signals that fetched file is now at the destination, and provides an optional
 /// checksum comparison method.
@@ -22,12 +21,8 @@ impl<T: Future<Item = (), Error = FetchError> + Send> CompletedState<T> {
         let future = self.future;
 
         future.and_then(move |_| {
-            hash_from_path::<D>(&destination, &checksum).with_context(|why| {
-                format!(
-                    "failed to validate hash for {}: {}",
-                    destination.display(),
-                    why
-                )
+            hash_from_path::<D>(&destination, &checksum).map_err(|why| {
+                why.context(FetchErrorKind::DestinationHash(destination.to_path_buf()))
             })?;
 
             Ok(())
