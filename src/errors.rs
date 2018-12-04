@@ -1,9 +1,8 @@
 use failure::{Backtrace, Context, Fail};
-use reqwest;
 use std::fmt::{self, Display};
-use std::io;
 use std::path::PathBuf;
 
+/// An error that occurred when fetching a file with this library.
 #[derive(Debug)]
 pub struct FetchError {
     inner: Context<FetchErrorKind>,
@@ -15,7 +14,7 @@ impl FetchError {
     }
 }
 
-#[derive(Debug, Fail)]
+#[derive(Clone, Debug, Fail, PartialEq)]
 pub enum FetchErrorKind {
     #[fail(display = "async fetch for {:?} failed", _0)]
     Fetch(PathBuf),
@@ -41,6 +40,12 @@ pub enum FetchErrorKind {
     ChunkRequest,
     #[fail(display = "chunk write")]
     ChunkWrite,
+    #[fail(display = "failed to set length of file")]
+    LengthSet,
+    #[fail(display = "failed to flush a file")]
+    Flush,
+    #[fail(display = "failed to copy file descriptor")]
+    FdCopy,
 }
 
 impl Fail for FetchError {
@@ -57,13 +62,16 @@ impl Display for FetchError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.inner)?;
         Fail::iter_causes(self)
-            .map(|cause| write!(f, ": {}", cause)).collect()
+            .map(|cause| write!(f, ": {}", cause))
+            .collect()
     }
 }
 
 impl<K: Into<FetchErrorKind>> From<K> for FetchError {
     fn from(kind: K) -> FetchError {
-        FetchError { inner: Context::new(kind.into()) }
+        FetchError {
+            inner: Context::new(kind.into()),
+        }
     }
 }
 

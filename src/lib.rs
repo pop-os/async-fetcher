@@ -39,11 +39,8 @@ mod states;
 use chrono::{DateTime, Utc};
 use digest::Digest;
 pub use errors::*;
-use failure::ResultExt;
-use filetime::FileTime;
-use futures::{future::ok as OkFuture, Future, Stream};
+use futures::{future::ok as OkFuture, Future};
 use hashing::*;
-use hex_view::HexView;
 use reqwest::{
     async::{Client, RequestBuilder, Response},
     header::{IF_MODIFIED_SINCE, LAST_MODIFIED},
@@ -51,12 +48,9 @@ use reqwest::{
 };
 pub use states::*;
 use std::{
-    fs::{remove_file as remove_file_sync, File as SyncFile},
-    io::{self, Read, Write},
+    io,
     path::{Path, PathBuf},
-    sync::Arc,
 };
-use tokio::fs::{remove_file, rename, File};
 
 /// A future builder for creating futures to fetch files from an asynchronous reqwest client.
 pub struct AsyncFetcher<'a> {
@@ -76,12 +70,7 @@ impl<'a> AsyncFetcher<'a> {
     ///
     /// Returns a `ResponseState`, which can either be manually handled by the caller, or used
     /// to commit the download with this API.
-    pub fn request_to_path(
-        self,
-        to_path: PathBuf,
-    ) -> ResponseState<
-        impl Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send,
-    > {
+    pub fn request_to_path(self, to_path: PathBuf) -> ResponseState<impl RequestFuture> {
         let (req, current) = self.set_if_modified_since(&to_path, self.client.get(&self.from_url));
         let url = self.from_url;
 
@@ -98,18 +87,15 @@ impl<'a> AsyncFetcher<'a> {
     ///
     /// Returns a `ResponseState`, which can either be manually handled by the caller, or used
     /// to commit the download with this API.
-    pub fn request_with_checksum_to_path<D: Digest>(
+    pub fn request_to_path_with_checksum<D: Digest>(
         self,
         to_path: PathBuf,
         checksum: &str,
-    ) -> ResponseState<
-        impl Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send,
-    > {
+    ) -> ResponseState<impl RequestFuture> {
         let future: Box<
             dyn Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error>
                 + Send,
         > = if hash_from_path::<D>(&to_path, &checksum).is_ok() {
-            debug!("checksum of destination matches the requested checksum");
             Box::new(OkFuture(None))
         } else {
             let req = self.client.get(&self.from_url);

@@ -1,8 +1,8 @@
 use super::CompletedState;
 use digest::Digest;
-use failure::{Fail, ResultExt};
+use failure::Fail;
 use filetime::{self, FileTime};
-use futures::{self, future::ok as OkFuture, Future, Stream};
+use futures::{self, future::ok as OkFuture, Future};
 use hashing::hash_from_path;
 use std::{
     fs::{remove_file as remove_file_sync, File as SyncFile},
@@ -37,7 +37,9 @@ impl FetchedState {
                     }
 
                     hash_from_path::<H>(&download_location, &checksum).map_err(|why| {
-                        why.context(FetchErrorKind::DestinationHash(download_location.to_path_buf()))
+                        why.context(FetchErrorKind::DestinationHash(
+                            download_location.to_path_buf(),
+                        ))
                     })?;
 
                     Ok(resp)
@@ -58,70 +60,79 @@ impl FetchedState {
         let dest = self.final_destination;
         let dest_copy = dest.clone();
 
-        let future = {
-            let dest = dest.clone();
-            self.future
-                .and_then(move |ftime| {
-                    let requires_rename = ftime.is_some();
+        let future =
+            {
+                let dest = dest.clone();
+                self.future
+                    .and_then(move |ftime| {
+                        let requires_rename = ftime.is_some();
 
-                    // Remove the original file and rename, if required.
-                    let rename_future: Box<
-                        dyn Future<Item = (), Error = FetchError> + Send,
-                    > = {
-                        if requires_rename && partial != dest {
-                            if dest.exists() {
-                                let d1 = dest.clone();
-                                let future = remove_file(dest.clone())
-                                    .map_err(move |why| {
-                                        FetchError::from(why.context(FetchErrorKind::Remove(d1.to_path_buf())))
-                                    })
-                                    .and_then(move |_| {
-                                        rename(partial.clone(), dest.clone()).map_err(move |why| {
+                        // Remove the original file and rename, if required.
+                        let rename_future: Box<
+                            dyn Future<Item = (), Error = FetchError> + Send,
+                        > = {
+                            if requires_rename && partial != dest {
+                                if dest.exists() {
+                                    let d1 = dest.clone();
+                                    let future =
+                                        remove_file(dest.clone())
+                                            .map_err(move |why| {
+                                                FetchError::from(why.context(
+                                                    FetchErrorKind::Remove(d1.to_path_buf()),
+                                                ))
+                                            })
+                                            .and_then(move |_| {
+                                                rename(partial.clone(), dest.clone())
+                                                    .map_err(move |why| {
+                                                        why.context(FetchErrorKind::Rename {
+                                                            src: partial.to_path_buf(),
+                                                            dst: dest.to_path_buf(),
+                                                        })
+                                                    })
+                                                    .map_err(FetchError::from)
+                                            });
+
+                                    Box::new(future)
+                                } else {
+                                    let future = rename(partial.clone(), dest.clone())
+                                        .map_err(move |why| {
                                             why.context(FetchErrorKind::Rename {
                                                 src: partial.to_path_buf(),
-                                                dst: dest.to_path_buf()
+                                                dst: dest.to_path_buf(),
                                             })
-                                        }).map_err(FetchError::from)
-                                    });
-
-                                Box::new(future)
-                            } else {
-                                let future =
-                                    rename(partial.clone(), dest.clone()).map_err(move |why| {
-                                        why.context(FetchErrorKind::Rename {
-                                            src: partial.to_path_buf(),
-                                            dst: dest.to_path_buf()
                                         })
-                                    }).map_err(FetchError::from);
+                                        .map_err(FetchError::from);
 
-                                Box::new(future)
+                                    Box::new(future)
+                                }
+                            } else {
+                                Box::new(OkFuture(()))
                             }
-                        } else {
-                            Box::new(OkFuture(()))
-                        }
-                    };
+                        };
 
-                    rename_future.map(move |_| ftime)
-                })
-                .and_then(|ftime| {
-                    futures::future::lazy(move || {
-                        if let Some(Some(ftime)) = ftime {
-                            debug!(
-                                "setting timestamp on {} to {:?}",
-                                dest_copy.as_ref().display(),
-                                ftime
-                            );
-
-                            filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)
-                                .map_err(|why| FetchError::from(
-                                    why.context(FetchErrorKind::FileTime(dest_copy.to_path_buf()))
-                                ))?;
-                        }
-
-                        Ok(())
+                        rename_future.map(move |_| ftime)
                     })
-                })
-        };
+                    .and_then(|ftime| {
+                        futures::future::lazy(move || {
+                            if let Some(Some(ftime)) = ftime {
+                                debug!(
+                                    "setting timestamp on {} to {:?}",
+                                    dest_copy.as_ref().display(),
+                                    ftime
+                                );
+
+                                filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)
+                                    .map_err(|why| {
+                                        FetchError::from(why.context(FetchErrorKind::FileTime(
+                                            dest_copy.to_path_buf(),
+                                        )))
+                                    })?;
+                            }
+
+                            Ok(())
+                        })
+                    })
+            };
 
         CompletedState {
             future: Box::new(future),
@@ -143,80 +154,81 @@ impl FetchedState {
         let dest = self.final_destination;
         let dest_copy = dest.clone();
 
-        let future = {
-            let dest = dest.clone();
-            self.future
-                .and_then(move |ftime| {
-                    let requires_processing = ftime.is_some();
+        let future =
+            {
+                let dest = dest.clone();
+                self.future
+                    .and_then(move |ftime| {
+                        let requires_processing = ftime.is_some();
 
-                    let decompress_future = {
-                        futures::future::lazy(move || {
-                            if requires_processing {
-                                debug!("constructing decompressor for {}", dest.display());
-                                let file = SyncFile::create(dest.as_ref()).map_err(|why| {
-                                    FetchError::from(why.context(FetchErrorKind::CreateDestination(
-                                        dest.to_path_buf()
-                                    )))
-                                })?;
-
-                                let mut destination = construct_writer(file).map_err(|why| {
-                                    FetchError::from(why.context(FetchErrorKind::WriterConstruction(
-                                        dest.to_path_buf()
-                                    )))
-                                })?;
-
-                                let mut partial_file = SyncFile::open(partial.as_ref())
-                                    .map_err(|why| {
-                                        FetchError::from(why.context(FetchErrorKind::Open(
-                                            partial.to_path_buf()
-                                        )))
+                        let decompress_future = {
+                            futures::future::lazy(move || {
+                                if requires_processing {
+                                    debug!("constructing decompressor for {}", dest.display());
+                                    let file = SyncFile::create(dest.as_ref()).map_err(|why| {
+                                        FetchError::from(why.context(
+                                            FetchErrorKind::CreateDestination(dest.to_path_buf()),
+                                        ))
                                     })?;
 
-                                debug!("processing to {}", dest.display());
-                                io::copy(&mut partial_file, &mut destination).map_err(
-                                    |why| {
+                                    let mut destination = construct_writer(file).map_err(|why| {
+                                        FetchError::from(why.context(
+                                            FetchErrorKind::WriterConstruction(dest.to_path_buf()),
+                                        ))
+                                    })?;
+
+                                    let mut partial_file = SyncFile::open(partial.as_ref())
+                                        .map_err(|why| {
+                                            FetchError::from(why.context(FetchErrorKind::Open(
+                                                partial.to_path_buf(),
+                                            )))
+                                        })?;
+
+                                    debug!("processing to {}", dest.display());
+                                    io::copy(&mut partial_file, &mut destination).map_err(|why| {
                                         FetchError::from(why.context(FetchErrorKind::Copy {
                                             src: partial.to_path_buf(),
-                                            dst: dest.to_path_buf()
+                                            dst: dest.to_path_buf(),
                                         }))
-                                    },
-                                )?;
+                                    })?;
 
-                                debug!("removing partial file at {}", partial.display());
-                                remove_file_sync(partial.as_ref()).map_err(|why| {
-                                    FetchError::from(why.context(FetchErrorKind::Remove(
-                                        partial.to_path_buf()
-                                    )))
-                                })?;
+                                    debug!("removing partial file at {}", partial.display());
+                                    remove_file_sync(partial.as_ref()).map_err(|why| {
+                                        FetchError::from(
+                                            why.context(FetchErrorKind::Remove(
+                                                partial.to_path_buf(),
+                                            )),
+                                        )
+                                    })?;
+                                }
+
+                                Ok(())
+                            })
+                        };
+
+                        decompress_future.map(move |_| ftime)
+                    })
+                    .and_then(|ftime| {
+                        futures::future::lazy(move || {
+                            if let Some(Some(ftime)) = ftime {
+                                debug!(
+                                    "setting timestamp on {} to {:?}",
+                                    dest_copy.display(),
+                                    ftime
+                                );
+
+                                filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)
+                                    .map_err(|why| {
+                                        FetchError::from(why.context(FetchErrorKind::FileTime(
+                                            dest_copy.to_path_buf(),
+                                        )))
+                                    })?;
                             }
 
                             Ok(())
                         })
-                    };
-
-                    decompress_future.map(move |_| ftime)
-                })
-                .and_then(|ftime| {
-                    futures::future::lazy(move || {
-                        if let Some(Some(ftime)) = ftime {
-                            debug!(
-                                "setting timestamp on {} to {:?}",
-                                dest_copy.display(),
-                                ftime
-                            );
-
-                            filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)
-                                .map_err(|why| {
-                                    FetchError::from(why.context(FetchErrorKind::FileTime(
-                                        dest_copy.to_path_buf()
-                                    )))
-                                })?;
-                        }
-
-                        Ok(())
                     })
-                })
-        };
+            };
 
         CompletedState {
             future: Box::new(future),

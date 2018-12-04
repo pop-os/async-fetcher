@@ -1,6 +1,6 @@
 use digest::Digest;
-use failure::{Context, Fail, ResultExt};
-use futures::{Future, Stream};
+use failure::Fail;
+use futures::Future;
 use hashing::hash_from_path;
 use std::{path::Path, sync::Arc};
 use {FetchError, FetchErrorKind};

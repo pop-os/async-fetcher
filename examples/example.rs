@@ -12,7 +12,7 @@ use flate2::write::GzDecoder;
 use futures::Future;
 use reqwest::async::Client;
 use sha2::Sha256;
-use std::{io, sync::Arc};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use xz2::write::XzDecoder;
 
@@ -68,7 +68,7 @@ pub fn main() {
             let request = AsyncFetcher::new(&client, url.clone())
                 // Specify the destination path where a source file may already exist.
                 // The destination will have the checksum verified.
-                .request_with_checksum_to_path::<Sha256>(dest.into(), &dest_checksum)
+                .request_to_path_with_checksum::<Sha256>(dest.into(), &dest_checksum)
                 // Download the file to this temporary path (to prevent overwriting a good file).
                 .then_download(temporary.into())
                 // Validate the checksum of the fetched file against Sha256
