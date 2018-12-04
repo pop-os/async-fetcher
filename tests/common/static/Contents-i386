@@ -1,0 +1,16 @@
+usr/games/steam  non-free/games/steam
+usr/lib/games/steam/steam  non-free/games/steam
+usr/share/applications/steam.desktop  non-free/games/steam
+usr/share/doc/steam/README.Debian  non-free/games/steam
+usr/share/doc/steam/changelog.Debian.gz  non-free/games/steam
+usr/share/doc/steam/copyright  non-free/games/steam
+usr/share/icons/hicolor/16x16/apps/steam.png  non-free/games/steam
+usr/share/icons/hicolor/24x24/apps/steam.png  non-free/games/steam
+usr/share/icons/hicolor/256x256/apps/steam.png  non-free/games/steam
+usr/share/icons/hicolor/32x32/apps/steam.png  non-free/games/steam
+usr/share/icons/hicolor/48x48/apps/steam.png  non-free/games/steam
+usr/share/icons/hicolor/48x48/apps/steam_tray_mono.png  non-free/games/steam
+usr/share/lintian/overrides/steam  non-free/games/steam
+usr/share/man/man6/steam.6.gz  non-free/games/steam
+usr/share/pixmaps/steam.png  non-free/games/steam
+usr/share/pixmaps/steam_tray_mono.png  non-free/games/steam
