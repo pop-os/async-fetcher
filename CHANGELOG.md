@@ -1,3 +1,7 @@
+# 0.1.2
+
+- Add progress callbacks
+
 # 0.1.1
 
 - Improve error handling using the `failure` crate.

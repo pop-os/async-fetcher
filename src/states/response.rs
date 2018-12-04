@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
 };
 use tokio::{fs::File, io::flush};
-use {FetchError, FetchErrorKind};
+use {FetchError, FetchErrorKind, FetchEvent};
 
 pub trait RequestFuture:
     Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send
@@ -26,6 +26,7 @@ impl<
 pub struct ResponseState<T: RequestFuture + 'static> {
     pub future: T,
     pub path: PathBuf,
+    pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
 }
 
 impl<T: RequestFuture + 'static> ResponseState<T> {
@@ -33,6 +34,7 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
     pub fn then_download(self, download_location: PathBuf) -> FetchedState {
         let final_destination = self.path;
         let future = self.future;
+        let cb = self.progress.clone();
 
         // Fetch the file to the download location.
         let download_location_: Arc<Path> = Arc::from(download_location.clone());
@@ -55,6 +57,13 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
                             .and_then(|h| h.parse::<u64>().ok())
                             .unwrap_or(0);
 
+                        // Signal the caller that we are about to fetch a file that is this size.
+                        if let Some(cb) = cb.as_ref() {
+                            cb(FetchEvent::Total(length));
+                        }
+
+                        let cb2 = cb.clone();
+
                         let future = File::create(download_location_.clone())
                             .map_err(move |why| {
                                 FetchError::from(why.context(FetchErrorKind::Create(dl2.to_path_buf())))
@@ -75,13 +84,28 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
                                         })
                                         // Attempt to write each chunk to our file.
                                         .for_each(move |chunk| {
-                                            file.write_all(chunk.as_ref())
+                                            let chunk: &[u8] = chunk.as_ref();
+                                            file.write_all(chunk)
                                                 .map(|_| ())
                                                 .context(FetchErrorKind::ChunkWrite)
-                                                .map_err(FetchError::from)
+                                                .map_err(FetchError::from)?;
+
+                                            // Signal the caller that we just fetched this many bytes.
+                                            if let Some(cb) = cb.as_ref() {
+                                                cb(FetchEvent::Progress(chunk.len() as u64));
+                                            }
+
+                                            Ok(())
                                         })
                                         // Return the file on success.
-                                        .map(move |_| copy)
+                                        .map(move |_| {
+                                            // Signal the caller that we just finished fetching many bytes.
+                                            if let Some(cb) = cb2.as_ref() {
+                                                cb(FetchEvent::DownloadComplete);
+                                            }
+
+                                            copy
+                                        })
                             })
                             // Ensure that the file is fully written to the disk.
                             .and_then(|file| {
@@ -103,6 +127,7 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
             future: Box::new(download_future),
             download_location: Arc::from(download_location),
             final_destination: Arc::from(final_destination),
+            progress: self.progress
         }
     }
 

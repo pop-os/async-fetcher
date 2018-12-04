@@ -10,6 +10,7 @@ The included `AsyncFetcher` is used to construct future(s) for execution on an a
 - Supports parallel execution on an asynchronous tokio runtime.
 - Decompress or process the fetched file before moving it into the destination.
 - Optional checksums to validate the fetched and destination files.
+- Optional progress callback events
 - Only fetches files when the existing file:
   - does not exist
   - is older than the server's copy

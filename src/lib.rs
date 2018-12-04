@@ -50,12 +50,14 @@ pub use states::*;
 use std::{
     io,
     path::{Path, PathBuf},
+    sync::Arc
 };
 
 /// A future builder for creating futures to fetch files from an asynchronous reqwest client.
 pub struct AsyncFetcher<'a> {
     client: &'a Client,
     from_url: String,
+    progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
 }
 
 impl<'a> AsyncFetcher<'a> {
@@ -63,7 +65,13 @@ impl<'a> AsyncFetcher<'a> {
     ///
     /// Stores the complete file to `to_path` when done.
     pub fn new(client: &'a Client, from_url: String) -> Self {
-        Self { client, from_url }
+        Self { client, from_url, progress: None }
+    }
+
+    /// Enable progress callback handling.
+    pub fn with_progress_callback<F: Fn(FetchEvent) + Send + Sync + 'static>(mut self, func: impl Into<Arc<F>>) -> Self {
+        self.progress = Some(func.into());
+        self
     }
 
     /// Submit the GET request for the file, if the modified time is too old.
@@ -72,14 +80,15 @@ impl<'a> AsyncFetcher<'a> {
     /// to commit the download with this API.
     pub fn request_to_path(self, to_path: PathBuf) -> ResponseState<impl RequestFuture> {
         let (req, current) = self.set_if_modified_since(&to_path, self.client.get(&self.from_url));
-        let url = self.from_url;
+        let cb = self.progress.clone();
 
         ResponseState {
             future: req
                 .send()
                 .and_then(|resp| resp.error_for_status())
-                .map(move |resp| check_response(resp, &url, current)),
+                .map(move |resp| check_response(resp, current, cb)),
             path: to_path,
+            progress: self.progress,
         }
     }
 
@@ -92,6 +101,8 @@ impl<'a> AsyncFetcher<'a> {
         to_path: PathBuf,
         checksum: &str,
     ) -> ResponseState<impl RequestFuture> {
+        let cb = self.progress.clone();
+
         let future: Box<
             dyn Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error>
                 + Send,
@@ -99,17 +110,17 @@ impl<'a> AsyncFetcher<'a> {
             Box::new(OkFuture(None))
         } else {
             let req = self.client.get(&self.from_url);
-            let url = self.from_url;
             let future = req
                 .send()
                 .and_then(|resp| resp.error_for_status())
-                .map(move |resp| check_response(resp, &url, None));
+                .map(move |resp| check_response(resp, None, cb));
             Box::new(future)
         };
 
         ResponseState {
             future,
             path: to_path,
+            progress: self.progress
         }
     }
 
@@ -137,11 +148,14 @@ impl<'a> AsyncFetcher<'a> {
 
 fn check_response(
     resp: Response,
-    url: &str,
     current: Option<DateTime<Utc>>,
+    progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
 ) -> Option<(Response, Option<DateTime<Utc>>)> {
     if resp.status() == StatusCode::NOT_MODIFIED {
-        debug!("{} was already fetched", url);
+        if let Some(cb) = progress {
+            cb(FetchEvent::AlreadyFetched)
+        }
+
         None
     } else {
         let date = resp
@@ -157,11 +171,26 @@ fn check_response(
             .map_or(true, |(&server, current)| current < server);
 
         if fetch {
-            debug!("GET {}", url);
+            if let Some(cb) = progress {
+                cb(FetchEvent::Get)
+            }
             Some((resp, date))
         } else {
-            debug!("{} was already fetched", url);
+            if let Some(cb) = progress {
+                cb(FetchEvent::AlreadyFetched)
+            }
+
             None
         }
     }
+}
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum FetchEvent {
+    Get,
+    AlreadyFetched,
+    Processing,
+    Progress(u64),
+    Total(u64),
+    DownloadComplete,
+    Finished
 }

@@ -1,17 +1,17 @@
 extern crate async_fetcher;
 extern crate flate2;
 extern crate futures;
+#[macro_use]
 extern crate log;
 extern crate reqwest;
 extern crate sha2;
 extern crate tokio;
 extern crate xz2;
 
-use async_fetcher::{AsyncFetcher, FetchError};
+use async_fetcher::{AsyncFetcher, FetchError, FetchEvent};
 use flate2::write::GzDecoder;
 use futures::Future;
 use reqwest::async::Client;
-use sha2::Sha256;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use xz2::write::XzDecoder;
@@ -19,27 +19,19 @@ use xz2::write::XzDecoder;
 pub fn main() {
     init_logging().unwrap();
 
-    let files: Vec<(String, &'static str, &'static str, String)> = vec![
+    let files: Vec<(String, String)> = vec![
         (
             // The URL to fetch the file from, if required.
             "http://apt.pop-os.org/proprietary/dists/cosmic/Contents-amd64.xz".into(),
-            // The checksum of the file to be downloaded.
-            "ed1c4d5b21086baa1dc98f912b5d52adaaeb248e35a9b27cd7e1f06a25781502",
-            // The checksum of the file after it has been processed, at its destination.
-            "8e03685a2420b63ad937ab1e741f00b19d4297122cb421dcbb0700d5c2cc145b",
             // The destination of the file after it has been processed.
             "Contents-amd64".into(),
         ),
         (
             "http://apt.pop-os.org/proprietary/dists/cosmic/Contents-all".into(),
-            "ad740b679291e333d35106735870cf7217d6c76801b45a01a8e7fde58c93aaf0",
-            "ad740b679291e333d35106735870cf7217d6c76801b45a01a8e7fde58c93aaf0",
             "Contents-all".into(),
         ),
         (
             "http://apt.pop-os.org/proprietary/dists/cosmic/Contents-i386.gz".into(),
-            "379f7a6c108bd9feb63848110a556fffb15975cdb22e4eeb25844292cd4c9285",
-            "67eb11e9bed8ac046572268f6748bf9dcf7848d771dd3343fba1490a7bbefb8a",
             "Contents-i386".into(),
         ),
     ];
@@ -53,26 +45,49 @@ pub fn main() {
     // Construct an iterator of futures for fetching our files.
     let future_iterator = files
         .into_iter()
-        .map(move |(url, fetched_sha256, dest_sha256, dest)| {
+        .map(move |(url, dest)| {
             // Store the fetched file into a temporary location.
             let temporary = [&dest, ".partial"].concat();
-
-            // Ensure the checksums survive for the duration of the future.
-            let fetched_checksum: Arc<str> = Arc::from(fetched_sha256);
-            let dest_checksum: Arc<str> = Arc::from(dest_sha256);
+            let temporary_ = temporary.clone();
+            let url_ = url.clone();
+            let dest_ = dest.to_owned();
 
             // Construct a future which will download our file. Note that what is being constructed is
             // a future, which means that no computations are being formed here. A data structure is
             // being created, which stores all of the state required for the computation, as well as
             // the instructions to be executed with that state.
             let request = AsyncFetcher::new(&client, url.clone())
+                // Define how to handle the callbacks that occur.
+                .with_progress_callback(move |event| {
+                    match event {
+                        FetchEvent::Get => {
+                            info!("GET {}", url_)
+                        }
+                        FetchEvent::AlreadyFetched => {
+                            info!("OK {}", url_)
+                        }
+                        FetchEvent::Processing => {
+                            info!("Processing {}", temporary_)
+                        }
+                        FetchEvent::Progress(bytes) => {
+                            info!("{} bytes written to {}", bytes, temporary_)
+                        }
+                        FetchEvent::Total(bytes) => {
+                            info!("{} is {} bytes", temporary_, bytes)
+                        }
+                        FetchEvent::DownloadComplete => {
+                            info!("{} is complete", temporary_)
+                        }
+                        FetchEvent::Finished => {
+                            info!("{} is complete", dest_)
+                        }
+                    }
+                })
                 // Specify the destination path where a source file may already exist.
                 // The destination will have the checksum verified.
-                .request_to_path_with_checksum::<Sha256>(dest.into(), &dest_checksum)
+                .request_to_path(dest.into())
                 // Download the file to this temporary path (to prevent overwriting a good file).
-                .then_download(temporary.into())
-                // Validate the checksum of the fetched file against Sha256
-                .with_checksum::<Sha256>(fetched_checksum);
+                .then_download(temporary.into());
 
             // Dynamically choose the correct decompressor for the given file.
             let future: Box<dyn Future<Item = (), Error = FetchError> + Send> =
@@ -80,13 +95,13 @@ pub fn main() {
                     Box::new(
                         request
                             .then_process(move |file| Ok(Box::new(XzDecoder::new(file))))
-                            .with_destination_checksum::<Sha256>(dest_checksum),
+                            .into_future()
                     )
                 } else if url.ends_with(".gz") {
                     Box::new(
                         request
                             .then_process(move |file| Ok(Box::new(GzDecoder::new(file))))
-                            .with_destination_checksum::<Sha256>(dest_checksum),
+                            .into_future()
                     )
                 } else {
                     Box::new(request.then_rename().into_future())
@@ -110,7 +125,7 @@ use log::{Level, LevelFilter, Metadata, Record, SetLoggerError};
 static LOGGER: SimpleLogger = SimpleLogger;
 
 pub fn init_logging() -> Result<(), SetLoggerError> {
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Debug))
+    log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Info))
 }
 
 struct SimpleLogger;
@@ -121,7 +136,9 @@ impl log::Log for SimpleLogger {
     }
 
     fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) && record.target() == "async_fetcher" {
+        if self.enabled(record.metadata())
+            && (record.target() == "async_fetcher" || record.target() == "example")
+        {
             eprintln!("{} - {}", record.level(), record.args());
         }
     }

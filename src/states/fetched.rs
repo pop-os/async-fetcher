@@ -11,13 +11,14 @@ use std::{
     sync::Arc,
 };
 use tokio::fs::{remove_file, rename};
-use {FetchError, FetchErrorKind};
+use {FetchError, FetchErrorKind, FetchEvent};
 
 /// This state manages renaming to the destination, and setting the timestamp of the fetched file.
 pub struct FetchedState {
     pub future: Box<dyn Future<Item = Option<Option<FileTime>>, Error = FetchError> + Send>,
     pub download_location: Arc<Path>,
     pub final_destination: Arc<Path>,
+    pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
 }
 
 impl FetchedState {
@@ -26,6 +27,7 @@ impl FetchedState {
     pub fn with_checksum<H: Digest>(self, checksum: Arc<str>) -> Self {
         let download_location = self.download_location;
         let final_destination = self.final_destination;
+        let cb = self.progress.clone();
 
         // Simply "enhance" our future to append an extra action.
         let new_future = {
@@ -34,6 +36,10 @@ impl FetchedState {
                 futures::future::lazy(move || {
                     if resp.is_none() {
                         return Ok(resp);
+                    }
+
+                    if let Some(cb) = cb {
+                        cb(FetchEvent::Processing);
                     }
 
                     hash_from_path::<H>(&download_location, &checksum).map_err(|why| {
@@ -51,6 +57,7 @@ impl FetchedState {
             future: Box::new(new_future),
             download_location: download_location,
             final_destination: final_destination,
+            progress: self.progress
         }
     }
 
