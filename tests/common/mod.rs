@@ -3,6 +3,7 @@ extern crate actix_web;
 
 use self::actix_web::{fs, middleware, server, App};
 use std::thread;
+use std::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -11,6 +12,8 @@ pub const FILES: &[(&str, &str, &str)] = &[
     ("Contents-amd64.xz", "ff510123c0696bb4cb98ea3bf3940a6153dec2ed15dcb0f559f551a34a1f9de4", "03875b3caacbe5880f91c40d85891ec22acbab5561a3b4125d8825b7f6a1b5e9"),
     ("Contents-i386", "67eb11e9bed8ac046572268f6748bf9dcf7848d771dd3343fba1490a7bbefb8a", "67eb11e9bed8ac046572268f6748bf9dcf7848d771dd3343fba1490a7bbefb8a")
 ];
+
+pub const CACHE_DIR: &str = "tests/files/";
 
 pub fn launch_server() -> u16 {
     let found = Arc::new(AtomicUsize::new(0));
@@ -40,5 +43,12 @@ pub fn launch_server() -> u16 {
         let _ = sys.run();
     });
 
-    found.load(Ordering::SeqCst) as u16
+    loop {
+        let port = found.load(Ordering::SeqCst) as u16;
+        if port != 0 {
+            return port;
+        } else {
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
 }

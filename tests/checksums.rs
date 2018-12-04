@@ -12,19 +12,29 @@ use flate2::write::GzDecoder;
 use futures::Future;
 use reqwest::async::Client;
 use sha2::Sha256;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use xz2::write::XzDecoder;
-use std::fs;
 
 mod common;
-use common::{launch_server, FILES};
+use common::{launch_server, CACHE_DIR, FILES};
 
 #[test]
-fn checksums() {
+fn decompression_and_checksums() {
     let port = launch_server();
 
-    fs::create_dir_all("checksum").unwrap();
+    let cache_path = [CACHE_DIR, "checksum"].concat();
+
+    {
+        let checksum_path = Path::new(&cache_path);
+        if checksum_path.exists() {
+            fs::remove_dir_all(&checksum_path).expect("failed to clean up");
+        }
+
+        fs::create_dir_all(&checksum_path).expect("failed to set up");
+    }
 
     // Construct a multi-threaded Tokio runtime for handling our futures.
     let mut runtime = Runtime::new().expect("failed to create runtime");
@@ -38,11 +48,9 @@ fn checksums() {
             format!("http://127.0.0.1:{}/{}", port, name),
             compressed,
             decompressed,
-            format!("checksum/{}", name)
+            format!("{}/{}", cache_path, name)
         ))
         .map(move |(url, fetched_sha256, dest_sha256, dest)| {
-            eprintln!("URL: {}", url);
-
             // Store the fetched file into a temporary location.
             let temporary = [&dest, ".partial"].concat();
 
@@ -50,17 +58,9 @@ fn checksums() {
             let fetched_checksum: Arc<str> = Arc::from(*fetched_sha256);
             let dest_checksum: Arc<str> = Arc::from(*dest_sha256);
 
-            // Construct a future which will download our file. Note that what is being constructed is
-            // a future, which means that no computations are being formed here. A data structure is
-            // being created, which stores all of the state required for the computation, as well as
-            // the instructions to be executed with that state.
             let request = AsyncFetcher::new(&client, url.clone())
-                // Specify the destination path where a source file may already exist.
-                // The destination will have the checksum verified.
                 .request_to_path_with_checksum::<Sha256>(dest.into(), &dest_checksum)
-                // Download the file to this temporary path (to prevent overwriting a good file).
                 .then_download(temporary.into())
-                // Validate the checksum of the fetched file against Sha256
                 .with_checksum::<Sha256>(fetched_checksum);
 
             // Dynamically choose the correct decompressor for the given file.
@@ -89,4 +89,5 @@ fn checksums() {
 
     // Execute each future asynchronously and in parallel.
     runtime.block_on(joined).expect("runtime error");
+    fs::remove_dir_all([CACHE_DIR, "checksum"].concat()).expect("failed to clean up");
 }
