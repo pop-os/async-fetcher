@@ -3,6 +3,7 @@ extern crate flate2;
 extern crate futures;
 #[macro_use]
 extern crate log;
+extern crate parking_lot;
 extern crate reqwest;
 extern crate sha2;
 extern crate tokio;
@@ -11,6 +12,7 @@ extern crate xz2;
 use async_fetcher::{AsyncFetcher, FetchError, FetchEvent};
 use flate2::write::GzDecoder;
 use futures::Future;
+use parking_lot::Mutex;
 use reqwest::async::Client;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -43,43 +45,57 @@ pub fn main() {
     let client = Arc::new(Client::new());
 
     // Construct an iterator of futures for fetching our files.
-    let future_iterator = files
-        .into_iter()
-        .map(move |(url, dest)| {
-            // Store the fetched file into a temporary location.
-            let temporary = [&dest, ".partial"].concat();
-            let temporary_ = temporary.clone();
-            let url_ = url.clone();
-            let dest_ = dest.to_owned();
+    let future_iterator = files.into_iter().map(move |(url, dest)| {
+        // Store the fetched file into a temporary location.
+        let temporary = [&dest, ".partial"].concat();
+        let temporary_ = temporary.clone();
+        let url_ = url.clone();
+        let dest_ = dest.to_owned();
 
-            // Construct a future which will download our file. Note that what is being constructed is
-            // a future, which means that no computations are being formed here. A data structure is
-            // being created, which stores all of the state required for the computation, as well as
-            // the instructions to be executed with that state.
-            let request = AsyncFetcher::new(&client, url.clone())
+        let total = Arc::new(Mutex::new(0));
+        let current = Arc::new(Mutex::new(0));
+
+        // Construct a future which will download our file. Note that what is being constructed is
+        // a future, which means that no computations are being formed here. A data structure is
+        // being created, which stores all of the state required for the computation, as well as
+        // the instructions to be executed with that state.
+        let request = AsyncFetcher::new(&client, url.clone())
                 // Define how to handle the callbacks that occur.
                 .with_progress_callback(move |event| {
                     match event {
                         FetchEvent::Get => {
-                            info!("GET {}", url_)
+                            info!("GET {}", url_);
                         }
                         FetchEvent::AlreadyFetched => {
-                            info!("OK {}", url_)
+                            info!("OK {}", url_);
                         }
                         FetchEvent::Processing => {
-                            info!("Processing {}", temporary_)
+                            info!("Processing {}", temporary_);
                         }
                         FetchEvent::Progress(bytes) => {
-                            info!("{} bytes written to {}", bytes, temporary_)
+                            let current: u64 = {
+                                let mut lock = current.lock();
+                                *lock += bytes;
+                                *lock
+                            };
+
+                            let total: u64 = *total.lock();
+                            info!(
+                                "{}: {}% of {} KiB",
+                                temporary_,
+                                (current * 100) / total,
+                                total / 1024
+                            );
                         }
                         FetchEvent::Total(bytes) => {
-                            info!("{} is {} bytes", temporary_, bytes)
+                            info!("{} is {} bytes", temporary_, bytes);
+                            *total.lock() = bytes;
                         }
                         FetchEvent::DownloadComplete => {
-                            info!("{} is complete", temporary_)
+                            info!("{} is complete", temporary_);
                         }
                         FetchEvent::Finished => {
-                            info!("{} is complete", dest_)
+                            info!("{} is complete", dest_);
                         }
                     }
                 })
@@ -89,26 +105,26 @@ pub fn main() {
                 // Download the file to this temporary path (to prevent overwriting a good file).
                 .then_download(temporary.into());
 
-            // Dynamically choose the correct decompressor for the given file.
-            let future: Box<dyn Future<Item = (), Error = FetchError> + Send> =
-                if url.ends_with(".xz") {
-                    Box::new(
-                        request
-                            .then_process(move |file| Ok(Box::new(XzDecoder::new(file))))
-                            .into_future()
-                    )
-                } else if url.ends_with(".gz") {
-                    Box::new(
-                        request
-                            .then_process(move |file| Ok(Box::new(GzDecoder::new(file))))
-                            .into_future()
-                    )
-                } else {
-                    Box::new(request.then_rename().into_future())
-                };
+        // Dynamically choose the correct decompressor for the given file.
+        let future: Box<dyn Future<Item = (), Error = FetchError> + Send> = if url.ends_with(".xz")
+        {
+            Box::new(
+                request
+                    .then_process(move |file| Ok(Box::new(XzDecoder::new(file))))
+                    .into_future(),
+            )
+        } else if url.ends_with(".gz") {
+            Box::new(
+                request
+                    .then_process(move |file| Ok(Box::new(GzDecoder::new(file))))
+                    .into_future(),
+            )
+        } else {
+            Box::new(request.then_rename().into_future())
+        };
 
-            future
-        });
+        future
+    });
 
     // Join the iterator of futures into a single future for our runtime.
     let joined = futures::future::join_all(future_iterator);

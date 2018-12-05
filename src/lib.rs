@@ -50,14 +50,14 @@ pub use states::*;
 use std::{
     io,
     path::{Path, PathBuf},
-    sync::Arc
+    sync::Arc,
 };
 
 /// A future builder for creating futures to fetch files from an asynchronous reqwest client.
 pub struct AsyncFetcher<'a> {
     client: &'a Client,
     from_url: String,
-    progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
+    progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
 impl<'a> AsyncFetcher<'a> {
@@ -65,11 +65,18 @@ impl<'a> AsyncFetcher<'a> {
     ///
     /// Stores the complete file to `to_path` when done.
     pub fn new(client: &'a Client, from_url: String) -> Self {
-        Self { client, from_url, progress: None }
+        Self {
+            client,
+            from_url,
+            progress: None,
+        }
     }
 
     /// Enable progress callback handling.
-    pub fn with_progress_callback<F: Fn(FetchEvent) + Send + Sync + 'static>(mut self, func: impl Into<Arc<F>>) -> Self {
+    pub fn with_progress_callback<F: Fn(FetchEvent) + Send + Sync + 'static>(
+        mut self,
+        func: impl Into<Arc<F>>,
+    ) -> Self {
         self.progress = Some(func.into());
         self
     }
@@ -120,7 +127,7 @@ impl<'a> AsyncFetcher<'a> {
         ResponseState {
             future,
             path: to_path,
-            progress: self.progress
+            progress: self.progress,
         }
     }
 
@@ -149,7 +156,7 @@ impl<'a> AsyncFetcher<'a> {
 fn check_response(
     resp: Response,
     current: Option<DateTime<Utc>>,
-    progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
+    progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 ) -> Option<(Response, Option<DateTime<Utc>>)> {
     if resp.status() == StatusCode::NOT_MODIFIED {
         if let Some(cb) = progress {
@@ -192,5 +199,5 @@ pub enum FetchEvent {
     Progress(u64),
     Total(u64),
     DownloadComplete,
-    Finished
+    Finished,
 }

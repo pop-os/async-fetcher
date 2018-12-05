@@ -18,7 +18,7 @@ pub struct FetchedState {
     pub future: Box<dyn Future<Item = Option<Option<FileTime>>, Error = FetchError> + Send>,
     pub download_location: Arc<Path>,
     pub final_destination: Arc<Path>,
-    pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
+    pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
 impl FetchedState {
@@ -57,7 +57,7 @@ impl FetchedState {
             future: Box::new(new_future),
             download_location: download_location,
             final_destination: final_destination,
-            progress: self.progress
+            progress: self.progress,
         }
     }
 

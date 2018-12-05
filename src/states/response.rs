@@ -26,7 +26,7 @@ impl<
 pub struct ResponseState<T: RequestFuture + 'static> {
     pub future: T,
     pub path: PathBuf,
-    pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>
+    pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
 impl<T: RequestFuture + 'static> ResponseState<T> {
@@ -127,7 +127,7 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
             future: Box::new(download_future),
             download_location: Arc::from(download_location),
             final_destination: Arc::from(final_destination),
-            progress: self.progress
+            progress: self.progress,
         }
     }
 

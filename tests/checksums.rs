@@ -43,13 +43,16 @@ fn decompression_and_checksums() {
     let client = Arc::new(Client::new());
 
     // Construct an iterator of futures for fetching our files.
-    let future_iterator = FILES.iter()
-        .map(move |(name, compressed, decompressed)| (
-            format!("http://127.0.0.1:{}/{}", port, name),
-            compressed,
-            decompressed,
-            format!("{}/{}", cache_path, name)
-        ))
+    let future_iterator = FILES
+        .iter()
+        .map(move |(name, compressed, decompressed)| {
+            (
+                format!("http://127.0.0.1:{}/{}", port, name),
+                compressed,
+                decompressed,
+                format!("{}/{}", cache_path, name),
+            )
+        })
         .map(move |(url, fetched_sha256, dest_sha256, dest)| {
             // Store the fetched file into a temporary location.
             let temporary = [&dest, ".partial"].concat();
