@@ -24,6 +24,7 @@ failure_derive = "0.1.3"
 # Fix build for 1.28.0
 encoding_rs = "=0.8.9"
 
+
 # Required for our integration tests.
 [dev-dependencies]
 flate2 = "1.0.5"
@@ -31,4 +32,4 @@ sha2 = "0.8.0"
 xz2 = "0.1.6"
 actix = "=0.7.3"
 actix-web = "=0.7.3"
-parking_lot = "0.7.0"
+atomic = "0.4.1"

@@ -1,20 +1,20 @@
 extern crate async_fetcher;
+extern crate atomic;
 extern crate flate2;
 extern crate futures;
 #[macro_use]
 extern crate log;
-extern crate parking_lot;
 extern crate reqwest;
 extern crate sha2;
 extern crate tokio;
 extern crate xz2;
 
 use async_fetcher::{AsyncFetcher, FetchError, FetchEvent};
+use atomic::Atomic;
 use flate2::write::GzDecoder;
 use futures::Future;
-use parking_lot::Mutex;
 use reqwest::async::Client;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 use tokio::runtime::Runtime;
 use xz2::write::XzDecoder;
 
@@ -52,8 +52,8 @@ pub fn main() {
         let url_ = url.clone();
         let dest_ = dest.to_owned();
 
-        let total = Arc::new(Mutex::new(0));
-        let current = Arc::new(Mutex::new(0));
+        let total: Atomic<u64> = Atomic::new(0);
+        let current: Atomic<u64> = Atomic::new(0);
 
         // Construct a future which will download our file. Note that what is being constructed is
         // a future, which means that no computations are being formed here. A data structure is
@@ -74,12 +74,11 @@ pub fn main() {
                         }
                         FetchEvent::Progress(bytes) => {
                             let current: u64 = {
-                                let mut lock = current.lock();
-                                *lock += bytes;
-                                *lock
+                                current.fetch_add(bytes, Ordering::SeqCst);
+                                current.load(Ordering::SeqCst)
                             };
 
-                            let total: u64 = *total.lock();
+                            let total: u64 = total.load(Ordering::SeqCst);
                             info!(
                                 "{}: {}% of {} KiB",
                                 temporary_,
@@ -89,7 +88,7 @@ pub fn main() {
                         }
                         FetchEvent::Total(bytes) => {
                             info!("{} is {} bytes", temporary_, bytes);
-                            *total.lock() = bytes;
+                            total.store(bytes, Ordering::SeqCst);
                         }
                         FetchEvent::DownloadComplete => {
                             info!("{} is complete", temporary_);
