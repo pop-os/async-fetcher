@@ -1,6 +1,6 @@
 [package]
 name = "async-fetcher"
-version = "0.1.2"
+version = "0.1.3-alpha.0"
 repository = "https://github.com/pop-os/async-fetcher"
 authors = ["Michael Aaron Murphy <mmstickman@gmail.com>"]
 description = "Asynchronous file fetcher with optional fetching based on modified times and checksums"
