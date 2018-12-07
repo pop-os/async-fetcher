@@ -1,7 +1,7 @@
 use digest::Digest;
 use hex_view::HexView;
-use std::fs::File as SyncFile;
 use std::{
+    fs::File as SyncFile,
     io::{self, Read},
     path::Path,
 };

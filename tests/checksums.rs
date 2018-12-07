@@ -12,9 +12,7 @@ use flate2::write::GzDecoder;
 use futures::Future;
 use reqwest::async::Client;
 use sha2::Sha256;
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
+use std::{fs, path::Path, sync::Arc};
 use tokio::runtime::Runtime;
 use xz2::write::XzDecoder;
 
@@ -37,7 +35,7 @@ fn decompression_and_checksums() {
     }
 
     // Construct a multi-threaded Tokio runtime for handling our futures.
-    let mut runtime = Runtime::new().expect("failed to create runtime");
+    let runtime = Runtime::new().expect("failed to create runtime");
 
     // Create an asynchronous reqwest Client that will be used to fetch all requests.
     let client = Arc::new(Client::new());
@@ -62,16 +60,22 @@ fn decompression_and_checksums() {
             let dest_checksum: Arc<str> = Arc::from(*dest_sha256);
 
             let request = AsyncFetcher::new(&client, url.clone())
+                // If the file at the destination does not have the given checksum, request it.
                 .request_to_path_with_checksum::<Sha256>(dest.into(), &dest_checksum)
+                // If the requested file is to be fetched, fetch it to the temporary location.
                 .then_download(temporary.into())
+                // Validate that the fetched file has the correct checksum.
                 .with_checksum::<Sha256>(fetched_checksum);
 
             // Dynamically choose the correct decompressor for the given file.
+            // If decompression is required, perform this in a separate thread.
             let future: Box<dyn Future<Item = (), Error = FetchError> + Send> =
                 if url.ends_with(".xz") {
                     Box::new(
                         request
+                            // If processing is required, this will decode in a separate thread.
                             .then_process(move |file| Ok(Box::new(XzDecoder::new(file))))
+                            // Check that the destination has the correct checksum.
                             .with_destination_checksum::<Sha256>(dest_checksum),
                     )
                 } else if url.ends_with(".gz") {
@@ -88,9 +92,12 @@ fn decompression_and_checksums() {
         });
 
     // Join the iterator of futures into a single future for our runtime.
-    let joined = futures::future::join_all(future_iterator);
+    let joined = futures::future::join_all(future_iterator)
+        .map(|_| ())
+        .map_err(|_| ());
 
     // Execute each future asynchronously and in parallel.
-    runtime.block_on(joined).expect("runtime error");
+    runtime.block_on_all(joined).expect("error when fetching");
+
     fs::remove_dir_all([CACHE_DIR, "checksum"].concat()).expect("failed to clean up");
 }

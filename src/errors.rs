@@ -1,6 +1,8 @@
 use failure::{Backtrace, Context, Fail};
-use std::fmt::{self, Display};
-use std::path::PathBuf;
+use std::{
+    fmt::{self, Display},
+    path::PathBuf,
+};
 
 /// An error that occurred when fetching a file with this library.
 #[derive(Debug)]
@@ -9,9 +11,7 @@ pub struct FetchError {
 }
 
 impl FetchError {
-    pub fn kind(&self) -> &FetchErrorKind {
-        self.inner.get_context()
-    }
+    pub fn kind(&self) -> &FetchErrorKind { self.inner.get_context() }
 }
 
 #[derive(Clone, Debug, Fail, PartialEq)]
@@ -49,13 +49,9 @@ pub enum FetchErrorKind {
 }
 
 impl Fail for FetchError {
-    fn cause(&self) -> Option<&Fail> {
-        self.inner.cause()
-    }
+    fn cause(&self) -> Option<&Fail> { self.inner.cause() }
 
-    fn backtrace(&self) -> Option<&Backtrace> {
-        self.inner.backtrace()
-    }
+    fn backtrace(&self) -> Option<&Backtrace> { self.inner.backtrace() }
 }
 
 impl Display for FetchError {
@@ -76,7 +72,5 @@ impl<K: Into<FetchErrorKind>> From<K> for FetchError {
 }
 
 impl From<Context<FetchErrorKind>> for FetchError {
-    fn from(inner: Context<FetchErrorKind>) -> FetchError {
-        FetchError { inner: inner }
-    }
+    fn from(inner: Context<FetchErrorKind>) -> FetchError { FetchError { inner } }
 }

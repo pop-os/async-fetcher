@@ -14,7 +14,7 @@ use atomic::Atomic;
 use flate2::write::GzDecoder;
 use futures::Future;
 use reqwest::async::Client;
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{atomic::Ordering, Arc};
 use tokio::runtime::Runtime;
 use xz2::write::XzDecoder;
 
@@ -146,9 +146,7 @@ pub fn init_logging() -> Result<(), SetLoggerError> {
 struct SimpleLogger;
 
 impl log::Log for SimpleLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Debug
-    }
+    fn enabled(&self, metadata: &Metadata) -> bool { metadata.level() <= Level::Debug }
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata())

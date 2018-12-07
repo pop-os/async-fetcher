@@ -2,10 +2,14 @@ extern crate actix;
 extern crate actix_web;
 
 use self::actix_web::{fs, middleware, server, App};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    thread,
+    time::Duration,
+};
 
 pub const FILES: &[(&str, &str, &str)] = &[
     (

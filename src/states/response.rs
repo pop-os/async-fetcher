@@ -10,7 +10,9 @@ use std::{
     sync::Arc,
 };
 use tokio::{fs::File, io::flush};
-use {FetchError, FetchErrorKind, FetchEvent};
+use FetchError;
+use FetchErrorKind;
+use FetchEvent;
 
 pub trait RequestFuture:
     Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send
@@ -20,12 +22,13 @@ pub trait RequestFuture:
 impl<
         T: Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send,
     > RequestFuture for T
-{}
+{
+}
 
 /// This state manages downloading a response into the temporary location.
 pub struct ResponseState<T: RequestFuture + 'static> {
-    pub future: T,
-    pub path: PathBuf,
+    pub future:          T,
+    pub path:            PathBuf,
     pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
@@ -124,15 +127,13 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
             });
 
         FetchedState {
-            future: Box::new(download_future),
+            future:            Box::new(download_future),
             download_location: Arc::from(download_location),
             final_destination: Arc::from(final_destination),
-            progress: self.progress,
+            progress:          self.progress,
         }
     }
 
     /// Convert this state into the future that it owns.
-    pub fn into_future(self) -> T {
-        self.future
-    }
+    pub fn into_future(self) -> T { self.future }
 }

@@ -2,7 +2,10 @@ use super::CompletedState;
 use digest::Digest;
 use failure::Fail;
 use filetime::{self, FileTime};
-use futures::{self, future::ok as OkFuture, Future};
+use futures::{
+    future::{lazy, ok as OkFuture, Future},
+    sync::oneshot,
+};
 use hashing::hash_from_path;
 use std::{
     fs::{remove_file as remove_file_sync, File as SyncFile},
@@ -10,15 +13,20 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tokio::fs::{remove_file, rename};
-use {FetchError, FetchErrorKind, FetchEvent};
+use tokio::{
+    executor::DefaultExecutor,
+    fs::{remove_file, rename},
+};
+use FetchError;
+use FetchErrorKind;
+use FetchEvent;
 
 /// This state manages renaming to the destination, and setting the timestamp of the fetched file.
 pub struct FetchedState {
     pub future: Box<dyn Future<Item = Option<Option<FileTime>>, Error = FetchError> + Send>,
     pub download_location: Arc<Path>,
     pub final_destination: Arc<Path>,
-    pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
+    pub(crate) progress:   Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
 impl FetchedState {
@@ -33,7 +41,7 @@ impl FetchedState {
         let new_future = {
             let download_location = download_location.clone();
             self.future.and_then(|resp| {
-                futures::future::lazy(move || {
+                lazy(move || {
                     if resp.is_none() {
                         return Ok(resp);
                     }
@@ -55,8 +63,8 @@ impl FetchedState {
 
         Self {
             future: Box::new(new_future),
-            download_location: download_location,
-            final_destination: final_destination,
+            download_location,
+            final_destination,
             progress: self.progress,
         }
     }
@@ -75,9 +83,7 @@ impl FetchedState {
                         let requires_rename = ftime.is_some();
 
                         // Remove the original file and rename, if required.
-                        let rename_future: Box<
-                            dyn Future<Item = (), Error = FetchError> + Send,
-                        > = {
+                        let rename_future: Box<dyn Future<Item = (), Error = FetchError> + Send> = {
                             if requires_rename && partial != dest {
                                 if dest.exists() {
                                     let d1 = dest.clone();
@@ -120,7 +126,7 @@ impl FetchedState {
                         rename_future.map(move |_| ftime)
                     })
                     .and_then(|ftime| {
-                        futures::future::lazy(move || {
+                        lazy(move || {
                             if let Some(Some(ftime)) = ftime {
                                 debug!(
                                     "setting timestamp on {} to {:?}",
@@ -142,7 +148,7 @@ impl FetchedState {
             };
 
         CompletedState {
-            future: Box::new(future),
+            future:      Box::new(future),
             destination: dest,
         }
     }
@@ -155,68 +161,60 @@ impl FetchedState {
         construct_writer: F,
     ) -> CompletedState<impl Future<Item = (), Error = FetchError> + Send>
     where
-        F: Fn(SyncFile) -> io::Result<Box<dyn Write + Send>> + Send,
+        F: Fn(SyncFile) -> io::Result<Box<dyn Write + Send>> + Send + 'static,
     {
         let partial = self.download_location;
         let dest = self.final_destination;
         let dest_copy = dest.clone();
 
-        let future =
-            {
-                let dest = dest.clone();
-                self.future
-                    .and_then(move |ftime| {
-                        let requires_processing = ftime.is_some();
+        let future = {
+            let dest = dest.clone();
+            self.future.and_then(move |ftime| {
+                let requires_processing = ftime.is_some();
 
-                        let decompress_future = {
-                            futures::future::lazy(move || {
-                                if requires_processing {
-                                    debug!("constructing decompressor for {}", dest.display());
-                                    let file = SyncFile::create(dest.as_ref()).map_err(|why| {
-                                        FetchError::from(why.context(
-                                            FetchErrorKind::CreateDestination(dest.to_path_buf()),
-                                        ))
-                                    })?;
+                let decompress = lazy(move || {
+                    if requires_processing {
+                        debug!("constructing decompressor for {}", dest.display());
+                        let file = SyncFile::create(dest.as_ref()).map_err(|why| {
+                            FetchError::from(
+                                why.context(FetchErrorKind::CreateDestination(dest.to_path_buf())),
+                            )
+                        })?;
 
-                                    let mut destination = construct_writer(file).map_err(|why| {
-                                        FetchError::from(why.context(
-                                            FetchErrorKind::WriterConstruction(dest.to_path_buf()),
-                                        ))
-                                    })?;
+                        let mut destination = construct_writer(file).map_err(|why| {
+                            FetchError::from(
+                                why.context(FetchErrorKind::WriterConstruction(dest.to_path_buf())),
+                            )
+                        })?;
 
-                                    let mut partial_file = SyncFile::open(partial.as_ref())
-                                        .map_err(|why| {
-                                            FetchError::from(why.context(FetchErrorKind::Open(
-                                                partial.to_path_buf(),
-                                            )))
-                                        })?;
+                        let mut partial_file = SyncFile::open(partial.as_ref()).map_err(|why| {
+                            FetchError::from(
+                                why.context(FetchErrorKind::Open(partial.to_path_buf())),
+                            )
+                        })?;
 
-                                    debug!("processing to {}", dest.display());
-                                    io::copy(&mut partial_file, &mut destination).map_err(|why| {
-                                        FetchError::from(why.context(FetchErrorKind::Copy {
-                                            src: partial.to_path_buf(),
-                                            dst: dest.to_path_buf(),
-                                        }))
-                                    })?;
+                        debug!("processing {} to {}", partial.display(), dest.display());
+                        io::copy(&mut partial_file, &mut destination).map_err(|why| {
+                            FetchError::from(why.context(FetchErrorKind::Copy {
+                                src: partial.to_path_buf(),
+                                dst: dest.to_path_buf(),
+                            }))
+                        })?;
 
-                                    debug!("removing partial file at {}", partial.display());
-                                    remove_file_sync(partial.as_ref()).map_err(|why| {
-                                        FetchError::from(
-                                            why.context(FetchErrorKind::Remove(
-                                                partial.to_path_buf(),
-                                            )),
-                                        )
-                                    })?;
-                                }
+                        debug!("removing partial file at {}", partial.display());
+                        remove_file_sync(partial.as_ref()).map_err(|why| {
+                            FetchError::from(
+                                why.context(FetchErrorKind::Remove(partial.to_path_buf())),
+                            )
+                        })
+                    } else {
+                        Ok(())
+                    }
+                });
 
-                                Ok(())
-                            })
-                        };
-
-                        decompress_future.map(move |_| ftime)
-                    })
-                    .and_then(|ftime| {
-                        futures::future::lazy(move || {
+                let future =
+                    decompress.and_then(move |_| {
+                        lazy(move || {
                             if let Some(Some(ftime)) = ftime {
                                 debug!(
                                     "setting timestamp on {} to {:?}",
@@ -234,11 +232,21 @@ impl FetchedState {
 
                             Ok(())
                         })
-                    })
-            };
+                    });
+
+                let optional_thread: Box<dyn Future<Item = (), Error = FetchError> + Send> =
+                    if requires_processing {
+                        Box::new(oneshot::spawn(future, &DefaultExecutor::current()))
+                    } else {
+                        Box::new(future)
+                    };
+
+                optional_thread
+            })
+        };
 
         CompletedState {
-            future: Box::new(future),
+            future:      Box::new(future),
             destination: dest,
         }
     }

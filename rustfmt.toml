@@ -1,0 +1,11 @@
+comment_width = 100
+condense_wildcard_suffixes = true
+enum_discrim_align_threshold = 40
+fn_single_line = true
+where_single_line = true
+merge_imports = true
+reorder_impl_items = true
+struct_field_align_threshold = 40
+use_field_init_shorthand = true
+use_try_shorthand = true
+

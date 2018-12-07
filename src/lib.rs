@@ -55,7 +55,7 @@ use std::{
 
 /// A future builder for creating futures to fetch files from an asynchronous reqwest client.
 pub struct AsyncFetcher<'a> {
-    client: &'a Client,
+    client:   &'a Client,
     from_url: String,
     progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
@@ -76,7 +76,8 @@ impl<'a> AsyncFetcher<'a> {
     pub fn with_progress_callback<F: Fn(FetchEvent) + Send + Sync + 'static>(
         mut self,
         func: impl Into<Arc<F>>,
-    ) -> Self {
+    ) -> Self
+    {
         self.progress = Some(func.into());
         self
     }
@@ -90,11 +91,11 @@ impl<'a> AsyncFetcher<'a> {
         let cb = self.progress.clone();
 
         ResponseState {
-            future: req
+            future:   req
                 .send()
                 .and_then(|resp| resp.error_for_status())
                 .map(move |resp| check_response(resp, current, cb)),
-            path: to_path,
+            path:     to_path,
             progress: self.progress,
         }
     }
@@ -107,7 +108,8 @@ impl<'a> AsyncFetcher<'a> {
         self,
         to_path: PathBuf,
         checksum: &str,
-    ) -> ResponseState<impl RequestFuture> {
+    ) -> ResponseState<impl RequestFuture>
+    {
         let cb = self.progress.clone();
 
         let future: Box<
@@ -135,7 +137,8 @@ impl<'a> AsyncFetcher<'a> {
         &self,
         to_path: &Path,
         mut req: RequestBuilder,
-    ) -> (RequestBuilder, Option<DateTime<Utc>>) {
+    ) -> (RequestBuilder, Option<DateTime<Utc>>)
+    {
         let date = if to_path.exists() {
             let when = self.date_time(&to_path).unwrap();
             let rfc = when.to_rfc2822();
@@ -157,7 +160,8 @@ fn check_response(
     resp: Response,
     current: Option<DateTime<Utc>>,
     progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
-) -> Option<(Response, Option<DateTime<Utc>>)> {
+) -> Option<(Response, Option<DateTime<Utc>>)>
+{
     if resp.status() == StatusCode::NOT_MODIFIED {
         if let Some(cb) = progress {
             cb(FetchEvent::AlreadyFetched)
