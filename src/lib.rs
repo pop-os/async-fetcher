@@ -54,17 +54,17 @@ use std::{
 };
 
 /// A future builder for creating futures to fetch files from an asynchronous reqwest client.
-pub struct AsyncFetcher<'a> {
+pub struct AsyncFetcher<'a, T: AsRef<str>> {
     client:   &'a Client,
-    from_url: String,
+    from_url: T,
     progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
-impl<'a> AsyncFetcher<'a> {
+impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     /// Initialze a new featuer to fetch from the given URL.
     ///
     /// Stores the complete file to `to_path` when done.
-    pub fn new(client: &'a Client, from_url: String) -> Self {
+    pub fn new(client: &'a Client, from_url: T) -> Self {
         Self {
             client,
             from_url,
@@ -87,7 +87,7 @@ impl<'a> AsyncFetcher<'a> {
     /// Returns a `ResponseState`, which can either be manually handled by the caller, or used
     /// to commit the download with this API.
     pub fn request_to_path(self, to_path: PathBuf) -> ResponseState<impl RequestFuture> {
-        let (req, current) = self.set_if_modified_since(&to_path, self.client.get(&self.from_url));
+        let (req, current) = self.set_if_modified_since(&to_path, self.client.get(self.from_url.as_ref()));
         let cb = self.progress.clone();
 
         ResponseState {
@@ -118,7 +118,7 @@ impl<'a> AsyncFetcher<'a> {
         > = if hash_from_path::<D>(&to_path, &checksum).is_ok() {
             Box::new(OkFuture(None))
         } else {
-            let req = self.client.get(&self.from_url);
+            let req = self.client.get(self.from_url.as_ref());
             let future = req
                 .send()
                 .and_then(|resp| resp.error_for_status())
