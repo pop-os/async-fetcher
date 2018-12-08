@@ -2,7 +2,7 @@ use super::FetchedState;
 use chrono::{DateTime, Utc};
 use failure::{Fail, ResultExt};
 use filetime::FileTime;
-use futures::{future::ok as OkFuture, Future, Stream};
+use futures::{future::ok as OkFuture, IntoFuture, Future, Stream};
 use reqwest::{self, async::Response, header::CONTENT_LENGTH};
 use std::{
     io::Write,
@@ -80,7 +80,6 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
                             })
                             // Download the file to the given download location.
                             .and_then(move |(mut file, copy)| {
-                                debug!("downloading to {}", download_location_.display());
                                 resp.into_body()
                                         .map_err(|why| {
                                             FetchError::from(why.context(FetchErrorKind::ChunkRequest))
@@ -133,7 +132,14 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
             progress:          self.progress,
         }
     }
+}
 
-    /// Convert this state into the future that it owns.
-    pub fn into_future(self) -> T { self.future }
+impl<T: RequestFuture + 'static> IntoFuture for ResponseState<T> {
+    type Future = T;
+    type Item = Option<(Response, Option<DateTime<Utc>>)>;
+    type Error = reqwest::Error;
+
+    fn into_future(self) -> Self::Future {
+        self.future
+    }
 }

@@ -1,6 +1,6 @@
 use digest::Digest;
 use failure::Fail;
-use futures::Future;
+use futures::{Future, IntoFuture};
 use hashing::hash_from_path;
 use std::{path::Path, sync::Arc};
 use FetchError;
@@ -30,7 +30,14 @@ impl<T: Future<Item = (), Error = FetchError> + Send> CompletedState<T> {
             Ok(())
         })
     }
+}
 
-    /// Convert this state into the future that it owns.
-    pub fn into_future(self) -> T { self.future }
+impl<T: Future<Item = (), Error = FetchError> + Send> IntoFuture for CompletedState<T> {
+    type Future = T;
+    type Item = ();
+    type Error = FetchError;
+
+    fn into_future(self) -> Self::Future {
+        self.future
+    }
 }

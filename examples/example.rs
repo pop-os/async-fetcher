@@ -12,10 +12,10 @@ extern crate xz2;
 use async_fetcher::{AsyncFetcher, FetchError, FetchEvent};
 use atomic::Atomic;
 use flate2::write::GzDecoder;
-use futures::Future;
+use futures::{Future, IntoFuture, future::lazy, sync::oneshot};
 use reqwest::async::Client;
 use std::sync::{atomic::Ordering, Arc};
-use tokio::runtime::Runtime;
+use tokio::{executor::DefaultExecutor, runtime::Runtime};
 use xz2::write::XzDecoder;
 
 pub fn main() {
@@ -43,6 +43,9 @@ pub fn main() {
 
     // Create an asynchronous reqwest Client that will be used to fetch all requests.
     let client = Arc::new(Client::new());
+
+    // The default executor, to spawn tasks on.
+    let executor = DefaultExecutor::current();
 
     // Construct an iterator of futures for fetching our files.
     let future_iterator = files.into_iter().map(move |(url, dest)| {
@@ -122,7 +125,10 @@ pub fn main() {
             Box::new(request.then_rename().into_future())
         };
 
-        future
+        lazy(|| {
+            let executor = DefaultExecutor::current();
+            oneshot::spawn(future, &executor)
+        })
     });
 
     // Join the iterator of futures into a single future for our runtime.

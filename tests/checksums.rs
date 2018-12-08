@@ -9,11 +9,11 @@ extern crate xz2;
 
 use async_fetcher::{AsyncFetcher, FetchError};
 use flate2::write::GzDecoder;
-use futures::Future;
+use futures::{Future, IntoFuture, future::lazy, sync::oneshot};
 use reqwest::async::Client;
 use sha2::Sha256;
 use std::{fs, path::Path, sync::Arc};
-use tokio::runtime::Runtime;
+use tokio::{executor::DefaultExecutor, runtime::Runtime};
 use xz2::write::XzDecoder;
 
 mod common;
@@ -88,7 +88,10 @@ fn decompression_and_checksums() {
                     Box::new(request.then_rename().into_future())
                 };
 
-            future
+            lazy(|| {
+                let executor = DefaultExecutor::current();
+                oneshot::spawn(future, &executor)
+            })
         });
 
     // Join the iterator of futures into a single future for our runtime.

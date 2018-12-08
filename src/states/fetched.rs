@@ -3,7 +3,7 @@ use digest::Digest;
 use failure::Fail;
 use filetime::{self, FileTime};
 use futures::{
-    future::{lazy, ok as OkFuture, Future},
+    future::{lazy, ok as OkFuture, IntoFuture, Future},
     sync::oneshot,
 };
 use hashing::hash_from_path;
@@ -250,10 +250,14 @@ impl FetchedState {
             destination: dest,
         }
     }
+}
 
-    pub fn into_future(
-        self,
-    ) -> impl Future<Item = Option<Option<FileTime>>, Error = FetchError> + Send {
+impl IntoFuture for FetchedState {
+    type Future = Box<dyn Future<Item = Self::Item, Error = Self::Error> + Send>;
+    type Item = Option<Option<FileTime>>;
+    type Error = FetchError;
+
+    fn into_future(self) -> Self::Future {
         self.future
     }
 }
