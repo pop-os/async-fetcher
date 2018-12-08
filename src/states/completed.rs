@@ -5,6 +5,7 @@ use hashing::hash_from_path;
 use std::{path::Path, sync::Arc};
 use FetchError;
 use FetchErrorKind;
+use FetcherExt;
 
 /// The state which signals that fetched file is now at the destination, and provides an optional
 /// checksum comparison method.
@@ -29,6 +30,16 @@ impl<T: Future<Item = (), Error = FetchError> + Send> CompletedState<T> {
 
             Ok(())
         })
+    }
+}
+
+impl<T: Future<Item = (), Error = FetchError> + Send> FetcherExt for CompletedState<T> {
+    fn wrap_future(
+        mut self,
+        mut func: impl FnMut(<Self as IntoFuture>::Future) -> <Self as IntoFuture>::Future + Send
+    ) -> Self {
+        self.future = func(self.future);
+        self
     }
 }
 

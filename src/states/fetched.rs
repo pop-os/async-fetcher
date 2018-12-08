@@ -20,6 +20,7 @@ use tokio::{
 use FetchError;
 use FetchErrorKind;
 use FetchEvent;
+use FetcherExt;
 
 /// This state manages renaming to the destination, and setting the timestamp of the fetched file.
 pub struct FetchedState {
@@ -249,6 +250,16 @@ impl FetchedState {
             future:      Box::new(future),
             destination: dest,
         }
+    }
+}
+
+impl FetcherExt for FetchedState {
+    fn wrap_future(
+        mut self,
+        mut func: impl FnMut(<Self as IntoFuture>::Future) -> <Self as IntoFuture>::Future + Send
+    ) -> Self {
+        self.future = func(self.future);
+        self
     }
 }
 

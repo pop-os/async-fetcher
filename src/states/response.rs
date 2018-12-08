@@ -13,6 +13,7 @@ use tokio::{fs::File, io::flush};
 use FetchError;
 use FetchErrorKind;
 use FetchEvent;
+use FetcherExt;
 
 pub trait RequestFuture:
     Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send
@@ -131,6 +132,16 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
             final_destination: Arc::from(final_destination),
             progress:          self.progress,
         }
+    }
+}
+
+impl<T: RequestFuture + 'static> FetcherExt for ResponseState<T> {
+    fn wrap_future(
+        mut self,
+        mut func: impl FnMut(<Self as IntoFuture>::Future) -> <Self as IntoFuture>::Future + Send
+    ) -> Self {
+        self.future = func(self.future);
+        self
     }
 }
 
