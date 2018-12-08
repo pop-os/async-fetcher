@@ -49,7 +49,7 @@ use reqwest::{
 pub use states::*;
 use std::{
     io,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
@@ -86,7 +86,7 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     ///
     /// Returns a `ResponseState`, which can either be manually handled by the caller, or used
     /// to commit the download with this API.
-    pub fn request_to_path(self, to_path: PathBuf) -> ResponseState<impl RequestFuture> {
+    pub fn request_to_path(self, to_path: Arc<Path>) -> ResponseState<impl RequestFuture> {
         let (req, current) = self.set_if_modified_since(&to_path, self.client.get(self.from_url.as_ref()));
         let cb = self.progress.clone();
 
@@ -106,7 +106,7 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     /// to commit the download with this API.
     pub fn request_to_path_with_checksum<D: Digest>(
         self,
-        to_path: PathBuf,
+        to_path: Arc<Path>,
         checksum: &str,
     ) -> ResponseState<impl RequestFuture>
     {
@@ -128,7 +128,7 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
 
         ResponseState {
             future,
-            path: to_path,
+            path:     to_path,
             progress: self.progress,
         }
     }

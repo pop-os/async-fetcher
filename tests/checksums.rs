@@ -12,7 +12,7 @@ use flate2::write::GzDecoder;
 use futures::{Future, IntoFuture, future::lazy, sync::oneshot};
 use reqwest::async::Client;
 use sha2::Sha256;
-use std::{fs, path::Path, sync::Arc};
+use std::{fs, path::{Path, PathBuf}, sync::Arc};
 use tokio::{executor::DefaultExecutor, runtime::Runtime};
 use xz2::write::XzDecoder;
 
@@ -53,7 +53,8 @@ fn decompression_and_checksums() {
         })
         .map(move |(url, fetched_sha256, dest_sha256, dest)| {
             // Store the fetched file into a temporary location.
-            let temporary = [&dest, ".partial"].concat();
+            let temporary = PathBuf::from([&dest, ".partial"].concat());
+            let dest: Arc<Path> = Arc::from(PathBuf::from(dest));
 
             // Ensure the checksums survive for the duration of the future.
             let fetched_checksum: Arc<str> = Arc::from(*fetched_sha256);
@@ -61,7 +62,7 @@ fn decompression_and_checksums() {
 
             let request = AsyncFetcher::new(&client, url.clone())
                 // If the file at the destination does not have the given checksum, request it.
-                .request_to_path_with_checksum::<Sha256>(dest.into(), &dest_checksum)
+                .request_to_path_with_checksum::<Sha256>(dest, &dest_checksum)
                 // If the requested file is to be fetched, fetch it to the temporary location.
                 .then_download(temporary.into())
                 // Validate that the fetched file has the correct checksum.

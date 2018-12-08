@@ -6,7 +6,7 @@ use futures::{future::ok as OkFuture, IntoFuture, Future, Stream};
 use reqwest::{self, async::Response, header::CONTENT_LENGTH};
 use std::{
     io::Write,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 use tokio::{fs::File, io::flush};
@@ -29,19 +29,19 @@ impl<
 /// This state manages downloading a response into the temporary location.
 pub struct ResponseState<T: RequestFuture + 'static> {
     pub future:          T,
-    pub path:            PathBuf,
+    pub path:            Arc<Path>,
     pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
 impl<T: RequestFuture + 'static> ResponseState<T> {
     /// If the file is to be downloaded, this will construct a future that does just that.
-    pub fn then_download(self, download_location: PathBuf) -> FetchedState {
+    pub fn then_download(self, download_location: Arc<Path>) -> FetchedState {
         let final_destination = self.path;
         let future = self.future;
         let cb = self.progress.clone();
 
         // Fetch the file to the download location.
-        let download_location_: Arc<Path> = Arc::from(download_location.clone());
+        let download_location_ = download_location.clone();
         let dl1 = download_location_.clone();
         let dl2 = download_location_.clone();
         let download_future = future
@@ -128,8 +128,8 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
 
         FetchedState {
             future:            Box::new(download_future),
-            download_location: Arc::from(download_location),
-            final_destination: Arc::from(final_destination),
+            download_location,
+            final_destination,
             progress:          self.progress,
         }
     }

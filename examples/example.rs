@@ -14,6 +14,7 @@ use atomic::Atomic;
 use flate2::write::GzDecoder;
 use futures::{Future, IntoFuture, future::lazy, sync::oneshot};
 use reqwest::async::Client;
+use std::path::{Path, PathBuf};
 use std::sync::{atomic::Ordering, Arc};
 use tokio::{executor::DefaultExecutor, runtime::Runtime};
 use xz2::write::XzDecoder;
@@ -44,13 +45,12 @@ pub fn main() {
     // Create an asynchronous reqwest Client that will be used to fetch all requests.
     let client = Arc::new(Client::new());
 
-    // The default executor, to spawn tasks on.
-    let executor = DefaultExecutor::current();
-
     // Construct an iterator of futures for fetching our files.
     let future_iterator = files.into_iter().map(move |(url, dest)| {
         // Store the fetched file into a temporary location.
-        let temporary = [&dest, ".partial"].concat();
+        let temporary: Arc<Path> = Arc::from(PathBuf::from([&dest, ".partial"].concat()));
+        let dest: Arc<Path> = Arc::from(PathBuf::from(dest));
+
         let temporary_ = temporary.clone();
         let url_ = url.clone();
         let dest_ = dest.to_owned();
@@ -73,7 +73,7 @@ pub fn main() {
                             info!("OK {}", url_);
                         }
                         FetchEvent::Processing => {
-                            info!("Processing {}", temporary_);
+                            info!("Processing {}", temporary_.display());
                         }
                         FetchEvent::Progress(bytes) => {
                             let current: u64 = {
@@ -84,20 +84,20 @@ pub fn main() {
                             let total: u64 = total.load(Ordering::SeqCst);
                             info!(
                                 "{}: {}% of {} KiB",
-                                temporary_,
+                                temporary_.display(),
                                 (current * 100) / total,
                                 total / 1024
                             );
                         }
                         FetchEvent::Total(bytes) => {
-                            info!("{} is {} bytes", temporary_, bytes);
+                            info!("{} is {} bytes", temporary_.display(), bytes);
                             total.store(bytes, Ordering::SeqCst);
                         }
                         FetchEvent::DownloadComplete => {
-                            info!("{} is complete", temporary_);
+                            info!("{} is complete", temporary_.display());
                         }
                         FetchEvent::Finished => {
-                            info!("{} is complete", dest_);
+                            info!("{} is complete", dest_.display());
                         }
                     }
                 })
