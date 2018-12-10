@@ -63,6 +63,11 @@ pub fn main() {
         // being created, which stores all of the state required for the computation, as well as
         // the instructions to be executed with that state.
         let request = AsyncFetcher::new(&client, url.clone())
+                // Check the content type, and change the path, potentially.
+                .with_content_type_callback(|content_type, path| {
+                    println!("{}", content_type);
+                    path
+                })
                 // Define how to handle the callbacks that occur.
                 .with_progress_callback(move |event| {
                     match event {

@@ -20,7 +20,6 @@
 //! - See the examples directory in the source repository for an example of it in practice.
 #[macro_use]
 extern crate log;
-#[macro_use]
 extern crate failure_derive;
 
 extern crate chrono;
@@ -58,7 +57,7 @@ pub struct AsyncFetcher<'a, T: AsRef<str>> {
     client:   &'a Client,
     from_url: T,
     progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
-    ctype: Option<Arc<dyn Fn(&str, &Path) -> Option<Arc<Path>> + Send + Sync>>,
+    ctype: Option<Arc<dyn Fn(String, Arc<Path>) -> Arc<Path> + Send + Sync>>,
 }
 
 impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
@@ -85,7 +84,7 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     }
 
     /// Enable manipulating the destination based on the content type
-    pub fn with_content_type_callback<F: Fn(&str, &Path) -> Option<Arc<Path>> + Send + Sync + 'static>(
+    pub fn with_content_type_callback<F: Fn(String, Arc<Path>) -> Arc<Path> + Send + Sync + 'static>(
         mut self,
         func: impl Into<Arc<F>>,
     ) -> Self {
@@ -171,7 +170,7 @@ fn check_response(
     resp: Response,
     current: Option<DateTime<Utc>>,
     progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
-    ctype: Option<Arc<dyn Fn(&str, &Path) -> Option<Arc<Path>> + Send + Sync>>,
+    ctype: Option<Arc<dyn Fn(String, Arc<Path>) -> Arc<Path> + Send + Sync>>,
     path: Arc<Path>,
 ) -> (Arc<Path>, Option<(Response, Option<DateTime<Utc>>)>)
 {
@@ -200,7 +199,7 @@ fn check_response(
                     .headers()
                     .get(CONTENT_TYPE)
                     .and_then(|h| h.to_str().ok())
-                    .map_or(path.clone(), move |v| cb(v, &path).unwrap_or(path))
+                    .map_or(path.clone(), move |v| cb(v.to_string(), path))
             }
             None => path
         };
