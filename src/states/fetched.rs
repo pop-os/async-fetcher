@@ -24,9 +24,8 @@ use FetcherExt;
 
 /// This state manages renaming to the destination, and setting the timestamp of the fetched file.
 pub struct FetchedState {
-    pub future: Box<dyn Future<Item = Option<Option<FileTime>>, Error = FetchError> + Send>,
+    pub future: Box<dyn Future<Item = (Arc<Path>, Option<(Option<FileTime>)>), Error = FetchError> + Send>,
     pub download_location: Arc<Path>,
-    pub final_destination: Arc<Path>,
     pub(crate) progress:   Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
@@ -35,7 +34,6 @@ impl FetchedState {
     /// given input.
     pub fn with_checksum<H: Digest>(self, checksum: Arc<str>) -> Self {
         let download_location = self.download_location;
-        let final_destination = self.final_destination;
         let cb = self.progress.clone();
 
         // Simply "enhance" our future to append an extra action.
@@ -43,7 +41,7 @@ impl FetchedState {
             let download_location = download_location.clone();
             self.future.and_then(|resp| {
                 lazy(move || {
-                    if resp.is_none() {
+                    if resp.1.is_none() {
                         return Ok(resp);
                     }
 
@@ -65,27 +63,26 @@ impl FetchedState {
         Self {
             future: Box::new(new_future),
             download_location,
-            final_destination,
             progress: self.progress,
         }
     }
 
     /// Replaces and renames the fetched file, then sets the file times.
-    pub fn then_rename(self) -> CompletedState<impl Future<Item = (), Error = FetchError> + Send> {
+    pub fn then_rename(self) -> CompletedState<impl Future<Item = Arc<Path>, Error = FetchError> + Send> {
         let partial = self.download_location;
-        let dest = self.final_destination;
-        let dest_copy = dest.clone();
+        // let dest = self.final_destination;
+        // let dest_copy = dest.clone();
 
         let future =
             {
-                let dest = dest.clone();
                 self.future
-                    .and_then(move |ftime| {
-                        let requires_rename = ftime.is_some();
+                    .and_then(move |(dest, resp)| {
+                        let requires_processing = resp.is_some();
+                        let dest_ = dest.clone();
 
                         // Remove the original file and rename, if required.
                         let rename_future: Box<dyn Future<Item = (), Error = FetchError> + Send> = {
-                            if requires_rename && partial != dest {
+                            if requires_processing {
                                 if dest.exists() {
                                     let d1 = dest.clone();
                                     let future =
@@ -124,33 +121,32 @@ impl FetchedState {
                             }
                         };
 
-                        rename_future.map(move |_| ftime)
+                        rename_future.map(move |_| (dest_, resp))
                     })
-                    .and_then(|ftime| {
+                    .and_then(|(dest, resp)| {
                         lazy(move || {
-                            if let Some(Some(ftime)) = ftime {
+                            if let Some(Some(ftime)) = resp {
                                 debug!(
                                     "setting timestamp on {} to {:?}",
-                                    dest_copy.as_ref().display(),
+                                    dest.as_ref().display(),
                                     ftime
                                 );
 
-                                filetime::set_file_times(dest_copy.as_ref(), ftime, ftime)
+                                filetime::set_file_times(dest.as_ref(), ftime, ftime)
                                     .map_err(|why| {
                                         FetchError::from(why.context(FetchErrorKind::FileTime(
-                                            dest_copy.to_path_buf(),
+                                            dest.to_path_buf(),
                                         )))
                                     })?;
                             }
 
-                            Ok(())
+                            Ok(dest)
                         })
                     })
             };
 
         CompletedState {
             future:      Box::new(future),
-            destination: dest,
         }
     }
 
@@ -160,18 +156,17 @@ impl FetchedState {
     pub fn then_process<F>(
         self,
         construct_writer: F,
-    ) -> CompletedState<impl Future<Item = (), Error = FetchError> + Send>
+    ) -> CompletedState<impl Future<Item = Arc<Path>, Error = FetchError> + Send>
     where
         F: Fn(SyncFile) -> io::Result<Box<dyn Write + Send>> + Send + 'static,
     {
         let partial = self.download_location;
-        let dest = self.final_destination;
-        let dest_copy = dest.clone();
 
         let future = {
-            let dest = dest.clone();
-            self.future.and_then(move |ftime| {
+            self.future.and_then(move |(dest, ftime)| {
                 let requires_processing = ftime.is_some();
+                let dest_copy = dest.clone();
+                let dest_out = dest.clone();
 
                 let decompress = lazy(move || {
                     if requires_processing {
@@ -242,13 +237,12 @@ impl FetchedState {
                         Box::new(future)
                     };
 
-                optional_thread
+                optional_thread.map(|_| dest_out)
             })
         };
 
         CompletedState {
             future:      Box::new(future),
-            destination: dest,
         }
     }
 }
@@ -265,7 +259,7 @@ impl FetcherExt for FetchedState {
 
 impl IntoFuture for FetchedState {
     type Future = Box<dyn Future<Item = Self::Item, Error = Self::Error> + Send>;
-    type Item = Option<Option<FileTime>>;
+    type Item = (Arc<Path>, Option<Option<FileTime>>);
     type Error = FetchError;
 
     fn into_future(self) -> Self::Future {

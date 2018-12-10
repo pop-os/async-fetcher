@@ -43,7 +43,7 @@ use futures::{future::ok as OkFuture, Future};
 use hashing::*;
 use reqwest::{
     async::{Client, RequestBuilder, Response},
-    header::{IF_MODIFIED_SINCE, LAST_MODIFIED},
+    header::{CONTENT_TYPE, IF_MODIFIED_SINCE, LAST_MODIFIED},
     StatusCode,
 };
 pub use states::*;
@@ -58,6 +58,7 @@ pub struct AsyncFetcher<'a, T: AsRef<str>> {
     client:   &'a Client,
     from_url: T,
     progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
+    ctype: Option<Arc<dyn Fn(&str, &Path) -> Option<Arc<Path>> + Send + Sync>>,
 }
 
 impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
@@ -69,6 +70,7 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
             client,
             from_url,
             progress: None,
+            ctype: None,
         }
     }
 
@@ -82,6 +84,15 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
         self
     }
 
+    /// Enable manipulating the destination based on the content type
+    pub fn with_content_type_callback<F: Fn(&str, &Path) -> Option<Arc<Path>> + Send + Sync + 'static>(
+        mut self,
+        func: impl Into<Arc<F>>,
+    ) -> Self {
+        self.ctype = Some(func.into());
+        self
+    }
+
     /// Submit the GET request for the file, if the modified time is too old.
     ///
     /// Returns a `ResponseState`, which can either be manually handled by the caller, or used
@@ -89,13 +100,13 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     pub fn request_to_path(self, to_path: Arc<Path>) -> ResponseState<impl RequestFuture> {
         let (req, current) = self.set_if_modified_since(&to_path, self.client.get(self.from_url.as_ref()));
         let cb = self.progress.clone();
+        let ct = self.ctype;
 
         ResponseState {
             future:   req
                 .send()
                 .and_then(|resp| resp.error_for_status())
-                .map(move |resp| check_response(resp, current, cb)),
-            path:     to_path,
+                .map(move |resp| check_response(resp, current, cb, ct, to_path)),
             progress: self.progress,
         }
     }
@@ -111,24 +122,24 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     ) -> ResponseState<impl RequestFuture>
     {
         let cb = self.progress.clone();
+        let ct = self.ctype;
 
         let future: Box<
-            dyn Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error>
+            dyn Future<Item = (Arc<Path>, Option<(Response, Option<DateTime<Utc>>)>), Error = reqwest::Error>
                 + Send,
-        > = if hash_from_path::<D>(&to_path, &checksum).is_ok() {
-            Box::new(OkFuture(None))
+        > = if ct.is_none() && hash_from_path::<D>(&to_path, &checksum).is_ok() {
+            Box::new(OkFuture((to_path, None)))
         } else {
             let req = self.client.get(self.from_url.as_ref());
             let future = req
                 .send()
                 .and_then(|resp| resp.error_for_status())
-                .map(move |resp| check_response(resp, None, cb));
+                .map(move |resp| check_response(resp, None, cb, ct, to_path));
             Box::new(future)
         };
 
         ResponseState {
             future,
-            path:     to_path,
             progress: self.progress,
         }
     }
@@ -160,14 +171,16 @@ fn check_response(
     resp: Response,
     current: Option<DateTime<Utc>>,
     progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
-) -> Option<(Response, Option<DateTime<Utc>>)>
+    ctype: Option<Arc<dyn Fn(&str, &Path) -> Option<Arc<Path>> + Send + Sync>>,
+    path: Arc<Path>,
+) -> (Arc<Path>, Option<(Response, Option<DateTime<Utc>>)>)
 {
     if resp.status() == StatusCode::NOT_MODIFIED {
         if let Some(cb) = progress {
             cb(FetchEvent::AlreadyFetched)
         }
 
-        None
+        (path, None)
     } else {
         let date = resp
             .headers()
@@ -181,20 +194,32 @@ fn check_response(
             .and_then(|server| current.map(|current| (server, current)))
             .map_or(true, |(&server, current)| current < server);
 
+        let path = match ctype {
+            Some(cb) => {
+                resp
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|h| h.to_str().ok())
+                    .map_or(path.clone(), move |v| cb(v, &path).unwrap_or(path))
+            }
+            None => path
+        };
+
         if fetch {
             if let Some(cb) = progress {
                 cb(FetchEvent::Get)
             }
-            Some((resp, date))
+            (path, Some((resp, date)))
         } else {
             if let Some(cb) = progress {
                 cb(FetchEvent::AlreadyFetched)
             }
 
-            None
+            (path, None)
         }
     }
 }
+
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum FetchEvent {
     Get,

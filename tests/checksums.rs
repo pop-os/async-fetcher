@@ -70,7 +70,7 @@ fn decompression_and_checksums() {
 
             // Dynamically choose the correct decompressor for the given file.
             // If decompression is required, perform this in a separate thread.
-            let future: Box<dyn Future<Item = (), Error = FetchError> + Send> =
+            let future: Box<dyn Future<Item = Arc<Path>, Error = FetchError> + Send> =
                 if url.ends_with(".xz") {
                     Box::new(
                         request

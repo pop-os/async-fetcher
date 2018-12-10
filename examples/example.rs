@@ -103,12 +103,12 @@ pub fn main() {
                 })
                 // Specify the destination path where a source file may already exist.
                 // The destination will have the checksum verified.
-                .request_to_path(dest.into())
+                .request_to_path(dest)
                 // Download the file to this temporary path (to prevent overwriting a good file).
-                .then_download(temporary.into());
+                .then_download(temporary);
 
         // Dynamically choose the correct decompressor for the given file.
-        let future: Box<dyn Future<Item = (), Error = FetchError> + Send> = if url.ends_with(".xz")
+        let future: Box<dyn Future<Item = Arc<Path>, Error = FetchError> + Send> = if url.ends_with(".xz")
         {
             Box::new(
                 request

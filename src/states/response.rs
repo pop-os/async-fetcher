@@ -16,12 +16,12 @@ use FetchEvent;
 use FetcherExt;
 
 pub trait RequestFuture:
-    Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send
+    Future<Item = (Arc<Path>, Option<(Response, Option<DateTime<Utc>>)>), Error = reqwest::Error> + Send
 {
 }
 
 impl<
-        T: Future<Item = Option<(Response, Option<DateTime<Utc>>)>, Error = reqwest::Error> + Send,
+        T: Future<Item = (Arc<Path>, Option<(Response, Option<DateTime<Utc>>)>), Error = reqwest::Error> + Send,
     > RequestFuture for T
 {
 }
@@ -29,14 +29,12 @@ impl<
 /// This state manages downloading a response into the temporary location.
 pub struct ResponseState<T: RequestFuture + 'static> {
     pub future:          T,
-    pub path:            Arc<Path>,
     pub(crate) progress: Option<Arc<dyn Fn(FetchEvent) + Send + Sync>>,
 }
 
 impl<T: RequestFuture + 'static> ResponseState<T> {
     /// If the file is to be downloaded, this will construct a future that does just that.
     pub fn then_download(self, download_location: Arc<Path>) -> FetchedState {
-        let final_destination = self.path;
         let future = self.future;
         let cb = self.progress.clone();
 
@@ -48,11 +46,11 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
             .map_err(move |why| {
                 FetchError::from(why.context(FetchErrorKind::Fetch(dl1.to_path_buf())))
             })
-            .and_then(move |resp| {
+            .and_then(move |(final_destination, resp)| {
                 let future: Box<
-                    dyn Future<Item = Option<Option<FileTime>>, Error = FetchError> + Send,
+                    dyn Future<Item = (Arc<Path>, Option<(Option<FileTime>)>), Error = FetchError> + Send,
                 > = match resp {
-                    None => Box::new(OkFuture(None)),
+                    None => Box::new(OkFuture((final_destination, None))),
                     Some((resp, date)) => {
                         let length = resp
                             .headers()
@@ -119,7 +117,7 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
                             // On success, we will return the filetime to assign to the destionation.
                             .map(move |_| Some(date.map(|date| FileTime::from_unix_time(date.timestamp(), 0))));
 
-                        Box::new(future)
+                        Box::new(future.map(|v| (final_destination, v)))
                     }
                 };
 
@@ -129,7 +127,6 @@ impl<T: RequestFuture + 'static> ResponseState<T> {
         FetchedState {
             future:            Box::new(download_future),
             download_location,
-            final_destination,
             progress:          self.progress,
         }
     }
@@ -147,7 +144,7 @@ impl<T: RequestFuture + 'static> FetcherExt for ResponseState<T> {
 
 impl<T: RequestFuture + 'static> IntoFuture for ResponseState<T> {
     type Future = T;
-    type Item = Option<(Response, Option<DateTime<Utc>>)>;
+    type Item = (Arc<Path>, Option<(Response, Option<DateTime<Utc>>)>);
     type Error = reqwest::Error;
 
     fn into_future(self) -> Self::Future {
