@@ -20,6 +20,7 @@
 //! - See the examples directory in the source repository for an example of it in practice.
 #[macro_use]
 extern crate log;
+#[macro_use]
 extern crate failure_derive;
 
 extern crate chrono;
@@ -41,7 +42,7 @@ pub use errors::*;
 use futures::{future::ok as OkFuture, Future};
 use hashing::*;
 use reqwest::{
-    async::{Client, RequestBuilder, Response},
+    r#async::{Client, RequestBuilder, Response},
     header::{CONTENT_TYPE, IF_MODIFIED_SINCE, LAST_MODIFIED},
     StatusCode,
 };

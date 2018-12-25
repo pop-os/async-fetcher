@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use failure::{Fail, ResultExt};
 use filetime::FileTime;
 use futures::{future::ok as OkFuture, IntoFuture, Future, Stream};
-use reqwest::{self, async::Response, header::CONTENT_LENGTH};
+use reqwest::{self, r#async::Response, header::CONTENT_LENGTH};
 use std::{
     io::Write,
     path::Path,
