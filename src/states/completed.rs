@@ -1,8 +1,9 @@
 use digest::Digest;
 use failure::Fail;
-use futures::{Future, IntoFuture};
+use futures::{Future, IntoFuture, sync::oneshot};
 use hashing::hash_from_path;
 use std::{path::Path, sync::Arc};
+use tokio::executor::DefaultExecutor;
 use FetchError;
 use FetchErrorKind;
 use FetcherExt;
@@ -20,11 +21,16 @@ impl<T: Future<Item = Arc<Path>, Error = FetchError> + Send> CompletedState<T> {
     ) -> impl Future<Item = Arc<Path>, Error = FetchError> + Send
     {
         self.future.and_then(move |destination| {
-            hash_from_path::<D>(&destination, &checksum).map_err(|why| {
-                why.context(FetchErrorKind::DestinationHash(destination.to_path_buf()))
-            })?;
+            oneshot::spawn_fn(
+                move || {
+                    hash_from_path::<D>(&destination, &checksum).map_err(|why| {
+                        why.context(FetchErrorKind::DestinationHash(destination.to_path_buf()))
+                    })?;
 
-            Ok(destination)
+                    Ok(destination)
+                },
+                &DefaultExecutor::current()
+            )
         })
     }
 }
