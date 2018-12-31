@@ -17,9 +17,10 @@ pub struct CompletedState<T: Future<Item = Arc<Path>, Error = FetchError> + Send
 impl<T: Future<Item = Arc<Path>, Error = FetchError> + Send> CompletedState<T> {
     pub fn with_destination_checksum<D: Digest>(
         self,
-        checksum: Arc<str>,
+        checksum: &str,
     ) -> impl Future<Item = Arc<Path>, Error = FetchError> + Send
     {
+        let checksum: Arc<str> = checksum.into();
         self.future.and_then(move |destination| {
             oneshot::spawn_fn(
                 move || {

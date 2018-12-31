@@ -34,7 +34,8 @@ pub struct ResponseState<T: RequestFuture + 'static> {
 
 impl<T: RequestFuture + 'static> ResponseState<T> {
     /// If the file is to be downloaded, this will construct a future that does just that.
-    pub fn then_download(self, download_location: Arc<Path>) -> FetchedState {
+    pub fn then_download(self, download_location: &Path) -> FetchedState {
+        let download_location: Arc<Path> = download_location.into();
         let future = self.future;
         let cb = self.progress.clone();
 

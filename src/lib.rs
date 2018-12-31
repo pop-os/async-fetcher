@@ -97,7 +97,8 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     ///
     /// Returns a `ResponseState`, which can either be manually handled by the caller, or used
     /// to commit the download with this API.
-    pub fn request_to_path(self, to_path: Arc<Path>) -> ResponseState<impl RequestFuture> {
+    pub fn request_to_path(self, to_path: &Path) -> ResponseState<impl RequestFuture> {
+        let to_path: Arc<Path> = to_path.into();
         let (req, current) = self.set_if_modified_since(&to_path, self.client.get(self.from_url.as_ref()));
         let cb = self.progress.clone();
         let ct = self.ctype;
@@ -117,10 +118,11 @@ impl<'a, T: AsRef<str>> AsyncFetcher<'a, T> {
     /// to commit the download with this API.
     pub fn request_to_path_with_checksum<D: Digest>(
         self,
-        to_path: Arc<Path>,
+        to_path: &Path,
         checksum: &str,
     ) -> ResponseState<impl RequestFuture>
     {
+        let to_path: Arc<Path> = to_path.into();
         let cb = self.progress.clone();
         let ct = self.ctype;
 

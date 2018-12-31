@@ -32,7 +32,8 @@ pub struct FetchedState {
 impl FetchedState {
     /// Apply a `Digest`-able hash method to the downloaded file, and compare the checksum to the
     /// given input.
-    pub fn with_checksum<H: Digest>(self, checksum: Arc<str>) -> Self {
+    pub fn with_checksum<H: Digest>(self, checksum: &str) -> Self {
+        let checksum: Arc<str> = checksum.into();
         let download_location = self.download_location;
         let cb = self.progress.clone();
 

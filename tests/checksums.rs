@@ -54,19 +54,15 @@ fn decompression_and_checksums() {
         .map(move |(url, fetched_sha256, dest_sha256, dest)| {
             // Store the fetched file into a temporary location.
             let temporary = PathBuf::from([&dest, ".partial"].concat());
-            let dest: Arc<Path> = Arc::from(PathBuf::from(dest));
-
-            // Ensure the checksums survive for the duration of the future.
-            let fetched_checksum: Arc<str> = Arc::from(*fetched_sha256);
-            let dest_checksum: Arc<str> = Arc::from(*dest_sha256);
+            let dest = Path::new(&dest);
 
             let request = AsyncFetcher::new(&client, url.clone())
                 // If the file at the destination does not have the given checksum, request it.
-                .request_to_path_with_checksum::<Sha256>(dest, &dest_checksum)
+                .request_to_path_with_checksum::<Sha256>(dest, dest_sha256)
                 // If the requested file is to be fetched, fetch it to the temporary location.
-                .then_download(temporary.into())
+                .then_download(&temporary)
                 // Validate that the fetched file has the correct checksum.
-                .with_checksum::<Sha256>(fetched_checksum);
+                .with_checksum::<Sha256>(fetched_sha256);
 
             // Dynamically choose the correct decompressor for the given file.
             // If decompression is required, perform this in a separate thread.
@@ -77,13 +73,13 @@ fn decompression_and_checksums() {
                             // If processing is required, this will decode in a separate thread.
                             .then_process(move |file| Ok(Box::new(XzDecoder::new(file))))
                             // Check that the destination has the correct checksum.
-                            .with_destination_checksum::<Sha256>(dest_checksum),
+                            .with_destination_checksum::<Sha256>(&dest_sha256),
                     )
                 } else if url.ends_with(".gz") {
                     Box::new(
                         request
                             .then_process(move |file| Ok(Box::new(GzDecoder::new(file))))
-                            .with_destination_checksum::<Sha256>(dest_checksum),
+                            .with_destination_checksum::<Sha256>(&dest_sha256),
                     )
                 } else {
                     Box::new(request.then_rename().into_future())

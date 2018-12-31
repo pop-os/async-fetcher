@@ -48,8 +48,8 @@ pub fn main() {
     // Construct an iterator of futures for fetching our files.
     let future_iterator = files.into_iter().map(move |(url, dest)| {
         // Store the fetched file into a temporary location.
-        let temporary: Arc<Path> = Arc::from(PathBuf::from([&dest, ".partial"].concat()));
-        let dest: Arc<Path> = Arc::from(PathBuf::from(dest));
+        let temporary = PathBuf::from([&dest, ".partial"].concat());
+        let dest = Path::new(&dest);
 
         let temporary_ = temporary.clone();
         let url_ = url.clone();
@@ -110,7 +110,7 @@ pub fn main() {
                 // The destination will have the checksum verified.
                 .request_to_path(dest)
                 // Download the file to this temporary path (to prevent overwriting a good file).
-                .then_download(temporary);
+                .then_download(&temporary);
 
         // Dynamically choose the correct decompressor for the given file.
         let future: Box<dyn Future<Item = Arc<Path>, Error = FetchError> + Send> = if url.ends_with(".xz")
