@@ -57,6 +57,8 @@ pub enum Error {
     TimedOut,
     #[error("error writing to file")]
     Write(#[source] io::Error),
+    #[error("server responded with an error status: {}", _0)]
+    Status(StatusCode),
 }
 
 /// Information about a source being fetched.
@@ -280,11 +282,11 @@ impl<C: HttpClient> Fetcher<C> {
             file.set_len(length).await.map_err(Error::Write)?;
         }
 
-        let mut response: Response = if let Some(duration) = self.timeout {
+        let mut response: Response = validate(if let Some(duration) = self.timeout {
             timed(duration, async { request.await.map_err(Error::from) }).await??
         } else {
             request.await?
-        };
+        })?;
 
         if modified.is_none() {
             *modified = last_modified(&(response.headers()));
@@ -436,7 +438,7 @@ fn last_modified(headers: &Headers) -> Option<DateTime<Utc>> {
 }
 
 async fn head<C: HttpClient>(client: &Client<C>, uri: &str) -> Result<Response, Error> {
-    Ok(client.head(uri).await?)
+    validate(client.head(uri).await?)
 }
 
 async fn timed<F, T>(duration: Duration, future: F) -> Result<T, Error>
@@ -444,4 +446,14 @@ where
     F: Future<Output = T>,
 {
     async_std::future::timeout(duration, future).await.map_err(|_| Error::TimedOut)
+}
+
+fn validate(response: Response) -> Result<Response, Error> {
+    let status = response.status();
+
+    if status.as_u16() < 300 {
+        Ok(response)
+    } else {
+        Err(Error::Status(status))
+    }
 }
