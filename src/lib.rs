@@ -166,36 +166,37 @@ impl<C: HttpClient> Fetcher<C> {
 
         // If the file already exists, validate that it is the same.
         if to.exists() {
-            let mut response = head(&self.client, &*uris[0]).await?;
-            let headers = &(response.headers());
-            let content_length = content_length(headers);
-            modified = last_modified(headers);
+            if let Some(mut response) = head(&self.client, &*uris[0]).await? {
+                let headers = &(response.headers());
+                let content_length = content_length(headers);
+                modified = last_modified(headers);
 
-            if let (Some(content_length), Some(last_modified)) =
-                (content_length, modified)
-            {
-                match fs::metadata(to.as_ref()).await {
-                    Ok(metadata) => {
-                        let modified = metadata.modified().map_err(Error::Write)?;
-                        let ts = modified
-                            .duration_since(UNIX_EPOCH)
-                            .expect("time went backwards");
+                if let (Some(content_length), Some(last_modified)) =
+                    (content_length, modified)
+                {
+                    match fs::metadata(to.as_ref()).await {
+                        Ok(metadata) => {
+                            let modified = metadata.modified().map_err(Error::Write)?;
+                            let ts = modified
+                                .duration_since(UNIX_EPOCH)
+                                .expect("time went backwards");
 
-                        if metadata.len() == content_length
-                            && ts.as_secs() == last_modified.timestamp() as u64
-                        {
-                            return Ok(());
+                            if metadata.len() == content_length
+                                && ts.as_secs() == last_modified.timestamp() as u64
+                            {
+                                return Ok(());
+                            }
+
+                            if_modified_since =
+                                Some(DateTime::<Utc>::from(modified).to_rfc2822());
+                            length = Some(content_length);
                         }
-
-                        if_modified_since =
-                            Some(DateTime::<Utc>::from(modified).to_rfc2822());
-                        length = Some(content_length);
-                    }
-                    Err(why) => {
-                        eprintln!("failed to fetch metadata of {:?}: {}", to, why);
-                        fs::remove_file(to.as_ref())
-                            .await
-                            .map_err(Error::MetadataRemove)?;
+                        Err(why) => {
+                            eprintln!("failed to fetch metadata of {:?}: {}", to, why);
+                            fs::remove_file(to.as_ref())
+                                .await
+                                .map_err(Error::MetadataRemove)?;
+                        }
                     }
                 }
             }
@@ -203,21 +204,26 @@ impl<C: HttpClient> Fetcher<C> {
 
         // If set, this will use multiple connections to download a file in parts.
         if let Some(tasks) = self.connections_per_file {
-            let mut response = head(&self.client, &*uris[0]).await?;
-            let headers = &(response.headers());
-            modified = last_modified(headers);
-            let length = match length {
-                Some(length) => Some(length),
-                None => content_length(headers),
-            };
+            if let Some(mut response) = head(&self.client, &*uris[0]).await? {
+                let headers = &(response.headers());
+                modified = last_modified(headers);
+                let length = match length {
+                    Some(length) => Some(length),
+                    None => content_length(headers),
+                };
 
-            if let Some(length) = length {
-                if let Some(sender) = self.events.as_ref() {
-                    let _ = sender
-                        .unbounded_send(FetchEvent::ContentLength(to.clone(), length));
+                if let Some(length) = length {
+                    if supports_range(&self.client, &*uris[0], length).await? {
+                        if let Some(sender) = self.events.as_ref() {
+                            let _ = sender.unbounded_send(FetchEvent::ContentLength(
+                                to.clone(),
+                                length,
+                            ));
+                        }
+
+                        return self.get_many(length, tasks, uris, to, modified).await;
+                    }
                 }
-
-                return self.get_many(length, tasks, uris, to, modified).await;
             }
         }
 
@@ -226,7 +232,17 @@ impl<C: HttpClient> Fetcher<C> {
             request = request.set_header("if-modified-since", modified_since.as_str());
         }
 
-        let path = self.get(&mut modified, request, to.clone(), to, None).await?;
+        let path =
+            match self.get(&mut modified, request, to.clone(), to.clone(), None).await {
+                Ok(path) => path,
+                // Server does not support if-modified-since
+                Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
+                    eprintln!("trying again");
+                    let request = self.client.get(&*uris[0]);
+                    self.get(&mut modified, request, to.clone(), to, None).await?
+                }
+                Err(why) => return Err(why),
+            };
 
         if let Some(modified) = modified {
             let filetime = FileTime::from_unix_time(modified.timestamp(), 0);
@@ -276,6 +292,7 @@ impl<C: HttpClient> Fetcher<C> {
         dest: Arc<Path>,
         length: Option<u64>,
     ) -> Result<Arc<Path>, Error> {
+        let request = request;
         let mut file = File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
 
         if let Some(length) = length {
@@ -437,8 +454,33 @@ fn last_modified(headers: &Headers) -> Option<DateTime<Utc>> {
         .map(|tz| tz.with_timezone(&Utc))
 }
 
-async fn head<C: HttpClient>(client: &Client<C>, uri: &str) -> Result<Response, Error> {
-    validate(client.head(uri).await?)
+async fn head<C: HttpClient>(
+    client: &Client<C>,
+    uri: &str,
+) -> Result<Option<Response>, Error> {
+    match validate(client.head(uri).await?).map(Some) {
+        result @ Ok(_) => result,
+        Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
+        Err(other) => Err(other),
+    }
+}
+
+async fn supports_range<C: HttpClient>(
+    client: &Client<C>,
+    uri: &str,
+    length: u64,
+) -> Result<bool, Error> {
+    let response = client
+        .head(uri)
+        .set_header("range", range::to_string(0, length).as_str())
+        .await?;
+
+    if response.status() == StatusCode::PARTIAL_CONTENT {
+        eprintln!("ranges supported");
+        Ok(true)
+    } else {
+        validate(response).map(|_| false)
+    }
 }
 
 async fn timed<F, T>(duration: Duration, future: F) -> Result<T, Error>

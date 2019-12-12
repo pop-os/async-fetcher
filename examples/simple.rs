@@ -17,7 +17,8 @@ async fn main_() {
     let urls = &[
         ("http://apt.pop-os.org/staging/master/dists/bionic/main/binary-amd64/Packages.gz", "Packages.gz"),
         ("http://apt.pop-os.org/staging/master/dists/bionic/main/source/Sources.gz", "Sources.gz"),
-        ("http://apt.pop-os.org/staging/master/pool/bionic/alacritty/alacritty_0.4.0~1575415744~18.04~44c7c07_amd64.deb", "alacritty.deb")
+        ("http://apt.pop-os.org/staging/master/pool/bionic/alacritty/alacritty_0.4.0~1575415744~18.04~44c7c07_amd64.deb", "alacritty.deb"),
+        ("https://prerelease.keybase.io/deb/pool/main/k/keybase/keybase_5.1.0-20191211211104.cd9333f9fc_amd64.deb", "keybase.deb"),
     ];
 
     let (tx, rx) = oneshot::channel();
@@ -61,7 +62,7 @@ async fn main_() {
     let fetcher = Arc::new(
         Fetcher::new(Client::new())
             .concurrent_files(4)
-            .connections_per_file(8)
+            .connections_per_file(1)
             .events(etx)
             .timeout(Duration::from_secs(5)),
     );
