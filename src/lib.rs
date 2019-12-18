@@ -59,6 +59,8 @@ pub enum Error {
     TimedOut,
     #[error("error writing to file")]
     Write(#[source] io::Error),
+    #[error("failed to rename partial to destination")]
+    Rename(#[source] io::Error),
     #[error("server responded with an error: {}", _0)]
     Status(StatusCode),
 }
@@ -69,6 +71,8 @@ pub struct Source {
     pub urls: Arc<[Box<str>]>,
     /// Where the file shall ultimately be fetched to.
     pub dest: Arc<Path>,
+    /// Optional location to store the partial file
+    pub part: Option<Arc<Path>>,
 }
 
 /// Events which are submitted by the fetcher.
@@ -238,18 +242,16 @@ impl<C: HttpClient> Fetcher<C> {
             request = request.set_header("if-modified-since", modified_since.as_str());
         }
 
-        let path = match self
-            .get(&mut modified, request, to.clone(), to.clone(), None)
-            .await
-        {
-            Ok(path) => path,
-            // Server does not support if-modified-since
-            Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
-                let request = self.client.get(&*uris[0]);
-                self.get(&mut modified, request, to.clone(), to, None).await?
-            }
-            Err(why) => return Err(why),
-        };
+        let path =
+            match self.get(&mut modified, request, to.clone(), to.clone(), None).await {
+                Ok(path) => path,
+                // Server does not support if-modified-since
+                Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
+                    let request = self.client.get(&*uris[0]);
+                    self.get(&mut modified, request, to.clone(), to, None).await?
+                }
+                Err(why) => return Err(why),
+            };
 
         if let Some(modified) = modified {
             let filetime = FileTime::from_unix_time(modified.timestamp(), 0);
@@ -275,8 +277,23 @@ impl<C: HttpClient> Fetcher<C> {
                             .unbounded_send(FetchEvent::Fetching(source.dest.clone()));
                     }
 
-                    let result =
-                        fetcher.clone().request(source.urls, source.dest.clone()).await;
+                    let result = match source.part {
+                        Some(part) => {
+                            match fetcher.clone().request(source.urls, part.clone()).await
+                            {
+                                Ok(()) => fs::rename(&*part, &*source.dest)
+                                    .await
+                                    .map_err(Error::Rename),
+                                Err(why) => Err(why),
+                            }
+                        }
+                        None => {
+                            fetcher
+                                .clone()
+                                .request(source.urls, source.dest.clone())
+                                .await
+                        }
+                    };
 
                     if let Some(sender) = fetcher.events.as_ref() {
                         let _ = sender.unbounded_send(FetchEvent::Fetched(

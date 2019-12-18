@@ -14,12 +14,14 @@ fn main() {
 }
 
 async fn main_() {
+    better_panic::install();
+
     let urls = &[
         ("http://apt.pop-os.org/staging/master/dists/bionic/main/binary-amd64/Packages.gz", "cache/Packages.gz"),
         ("http://apt.pop-os.org/staging/master/dists/bionic/main/source/Sources.gz", "cache/Sources.gz"),
     ];
 
-    std::fs::create_dir("cache").unwrap();
+    std::fs::create_dir_all("cache").unwrap();
 
     let (tx, rx) = oneshot::channel();
     let (etx, mut erx) = mpsc::unbounded();
@@ -72,6 +74,7 @@ async fn main_() {
         let iter = urls.into_iter().map(|(url, dest)| Source {
             urls: Arc::from(vec![Box::from(*url)]),
             dest: Arc::from(Path::new(dest)),
+            part: None,
         });
 
         let _ = tx.send(fetcher.from_stream(stream::iter(iter)).await);

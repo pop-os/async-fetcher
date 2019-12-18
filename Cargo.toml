@@ -27,3 +27,6 @@ thiserror = "1"
 
 surf = { git = "https://github.com/mmstick/surf" }
 http-client = { git = "https://github.com/mmstick/http-client" }
+
+[dev-dependencies]
+better-panic = "0.2.0"
