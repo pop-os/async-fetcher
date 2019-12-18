@@ -11,13 +11,19 @@ readme = "README.md"
 edition = "2018"
 
 [dependencies]
+async-std = "1"
 chrono = "0.4"
+derive-new = "0"
 filetime = "0.2"
 futures = "0.3"
+http = "0.1"
+log = "0.4"
 numtoa = "0.2"
 thiserror = "1"
-derive-new = "0"
-async-std = "1"
-http = "0.1"
-surf = { git = "https://github.com/pwoolcoc/surf", branch = "move-to-http-client" }
-http-client = { git = "https://github.com/pwoolcoc/http-client", branch = "issue-5-port-to-futures-0-3", features = ["native_client"] }
+
+# surf = "1"
+# surf = { git = "https://github.com/http-rs/surf" }
+# http-client = "1"
+
+surf = { git = "https://github.com/mmstick/surf" }
+http-client = { git = "https://github.com/mmstick/http-client" }

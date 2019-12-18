@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate derive_new;
 #[macro_use]
+extern crate log;
+#[macro_use]
 extern crate thiserror;
 
 mod range;
@@ -35,7 +37,7 @@ use surf::{
 /// An error from the asynchronous file fetcher.
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("http client Error")]
+    #[error("http client error")]
     Client(#[from] Exception),
     #[error("unable to concatenate fetched parts")]
     Concatenate(#[source] io::Error),
@@ -51,13 +53,13 @@ pub enum Error {
     Nameless,
     #[error("unable to open fetched part")]
     OpenPart(Arc<Path>, #[source] io::Error),
-    #[error("destination lacks parent directory")]
+    #[error("destination lacks parent")]
     Parentless,
     #[error("connection timed out")]
     TimedOut,
     #[error("error writing to file")]
     Write(#[source] io::Error),
-    #[error("server responded with an error status: {}", _0)]
+    #[error("server responded with an error: {}", _0)]
     Status(StatusCode),
 }
 
@@ -123,13 +125,16 @@ impl Default for Fetcher<NativeClient> {
 impl<C: HttpClient> Fetcher<C> {
     /// The number of files to fetch simultaneously.
     pub fn concurrent_files(mut self, concurrent: usize) -> Self {
-        self.concurrent_files = Some(concurrent);
+        self.concurrent_files = if concurrent > 1 { Some(concurrent) } else { None };
+
         self
     }
 
     /// The maximum number of connections to sustain concurrently per file.
     pub fn connections_per_file(mut self, connections: u16) -> Self {
-        self.connections_per_file = Some(connections);
+        self.connections_per_file =
+            if connections > 1 { Some(connections) } else { None };
+
         self
     }
 
@@ -141,7 +146,8 @@ impl<C: HttpClient> Fetcher<C> {
 
     /// The maximum size of a part file when downloading in parts.
     pub fn part_size(mut self, bytes: u64) -> Self {
-        self.part_size = Some(bytes);
+        self.part_size = if bytes == 0 { None } else { Some(bytes) };
+
         self
     }
 
@@ -192,7 +198,7 @@ impl<C: HttpClient> Fetcher<C> {
                             length = Some(content_length);
                         }
                         Err(why) => {
-                            eprintln!("failed to fetch metadata of {:?}: {}", to, why);
+                            error!("failed to fetch metadata of {:?}: {}", to, why);
                             fs::remove_file(to.as_ref())
                                 .await
                                 .map_err(Error::MetadataRemove)?;
@@ -232,17 +238,18 @@ impl<C: HttpClient> Fetcher<C> {
             request = request.set_header("if-modified-since", modified_since.as_str());
         }
 
-        let path =
-            match self.get(&mut modified, request, to.clone(), to.clone(), None).await {
-                Ok(path) => path,
-                // Server does not support if-modified-since
-                Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
-                    eprintln!("trying again");
-                    let request = self.client.get(&*uris[0]);
-                    self.get(&mut modified, request, to.clone(), to, None).await?
-                }
-                Err(why) => return Err(why),
-            };
+        let path = match self
+            .get(&mut modified, request, to.clone(), to.clone(), None)
+            .await
+        {
+            Ok(path) => path,
+            // Server does not support if-modified-since
+            Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
+                let request = self.client.get(&*uris[0]);
+                self.get(&mut modified, request, to.clone(), to, None).await?
+            }
+            Err(why) => return Err(why),
+        };
 
         if let Some(modified) = modified {
             let filetime = FileTime::from_unix_time(modified.timestamp(), 0);
@@ -292,14 +299,13 @@ impl<C: HttpClient> Fetcher<C> {
         dest: Arc<Path>,
         length: Option<u64>,
     ) -> Result<Arc<Path>, Error> {
-        let request = request;
         let mut file = File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
 
         if let Some(length) = length {
             file.set_len(length).await.map_err(Error::Write)?;
         }
 
-        let mut response: Response = validate(if let Some(duration) = self.timeout {
+        let response = &mut validate(if let Some(duration) = self.timeout {
             timed(duration, async { request.await.map_err(Error::from) }).await??
         } else {
             request.await?
@@ -317,13 +323,11 @@ impl<C: HttpClient> Fetcher<C> {
         let mut read;
 
         loop {
-            read = if let Some(duration) = self.timeout {
-                timed(duration, async {
-                    response.read(buffer).await.map_err(Error::Write)
-                })
-                .await??
-            } else {
-                response.read(buffer).await.map_err(Error::Write)?
+            let reader = async { response.read(buffer).await.map_err(Error::Write) };
+
+            read = match self.timeout {
+                Some(duration) => timed(duration, reader).await??,
+                None => reader.await?,
             };
 
             if read != 0 {
@@ -437,7 +441,7 @@ async fn concatenate(
     }
 
     if let Err(why) = fs::remove_file(&*part_path).await {
-        eprintln!("failed to remove part file ({:?}): {}", part_path, why);
+        error!("failed to remove part file ({:?}): {}", part_path, why);
     }
 
     Ok(())
@@ -476,7 +480,6 @@ async fn supports_range<C: HttpClient>(
         .await?;
 
     if response.status() == StatusCode::PARTIAL_CONTENT {
-        eprintln!("ranges supported");
         Ok(true)
     } else {
         validate(response).map(|_| false)
