@@ -32,6 +32,9 @@ async fn main_() {
     let event_handler = async move {
         while let Some(event) = erx.next().await {
             match event {
+                FetchEvent::AlreadyFetched(dest) => {
+                    println!("{:?} was already fetched", dest);
+                }
                 FetchEvent::ContentLength(dest, total) => {
                     println!("{:?}: total {}", dest, total);
                 }

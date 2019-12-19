@@ -78,6 +78,8 @@ pub struct Source {
 
 /// Events which are submitted by the fetcher.
 pub enum FetchEvent {
+    /// Signals that this file was already fetched.
+    AlreadyFetched(Arc<Path>),
     /// States that we know the length of the file being fetched.
     ContentLength(Arc<Path>, u64),
     /// Contains the result of a fetched file.
@@ -195,6 +197,7 @@ impl<C: HttpClient> Fetcher<C> {
                             if metadata.len() == content_length
                                 && ts.as_secs() == last_modified.timestamp() as u64
                             {
+                                self.send(FetchEvent::AlreadyFetched(to));
                                 return Ok(());
                             }
 
