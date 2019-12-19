@@ -66,6 +66,7 @@ pub enum Error {
 }
 
 /// Information about a source being fetched.
+#[derive(Debug)]
 pub struct Source {
     /// URLs whereby the file can be found.
     pub urls: Arc<[Box<str>]>,
@@ -224,12 +225,7 @@ impl<C: HttpClient> Fetcher<C> {
 
                 if let Some(length) = length {
                     if supports_range(&self.client, &*uris[0], length).await? {
-                        if let Some(sender) = self.events.as_ref() {
-                            let _ = sender.unbounded_send(FetchEvent::ContentLength(
-                                to.clone(),
-                                length,
-                            ));
-                        }
+                        self.send(FetchEvent::ContentLength(to.clone(), length));
 
                         return self.get_many(length, tasks, uris, to, modified).await;
                     }
@@ -272,10 +268,7 @@ impl<C: HttpClient> Fetcher<C> {
                 let fetcher = self.clone();
 
                 async move {
-                    if let Some(sender) = fetcher.events.as_ref() {
-                        let _ = sender
-                            .unbounded_send(FetchEvent::Fetching(source.dest.clone()));
-                    }
+                    fetcher.send(FetchEvent::Fetching(source.dest.clone()));
 
                     let result = match source.part {
                         Some(part) => {
@@ -295,12 +288,7 @@ impl<C: HttpClient> Fetcher<C> {
                         }
                     };
 
-                    if let Some(sender) = fetcher.events.as_ref() {
-                        let _ = sender.unbounded_send(FetchEvent::Fetched(
-                            source.dest.clone(),
-                            result,
-                        ));
-                    }
+                    fetcher.send(FetchEvent::Fetched(source.dest.clone(), result));
                 }
             })
             .await;
@@ -348,10 +336,7 @@ impl<C: HttpClient> Fetcher<C> {
             };
 
             if read != 0 {
-                if let Some(sender) = self.events.as_ref() {
-                    let _ =
-                        sender.unbounded_send(FetchEvent::Progress(dest.clone(), read));
-                }
+                self.send(FetchEvent::Progress(dest.clone(), read));
 
                 file.write_all(&buffer[..read]).await.map_err(Error::Write)?;
             } else {
@@ -401,10 +386,7 @@ impl<C: HttpClient> Fetcher<C> {
 
                 let range = range::to_string(offset, offset_to);
 
-                if let Some(sender) = fetcher.events.as_ref() {
-                    let _ =
-                        sender.unbounded_send(FetchEvent::PartFetching(to.clone(), task));
-                }
+                fetcher.send(FetchEvent::PartFetching(to.clone(), task));
 
                 let request =
                     fetcher.client.get(&*uri).set_header("range", range.as_str());
@@ -419,9 +401,7 @@ impl<C: HttpClient> Fetcher<C> {
                     )
                     .await;
 
-                if let Some(sender) = fetcher.events.as_ref() {
-                    let _ = sender.unbounded_send(FetchEvent::PartFetched(to, task));
-                }
+                fetcher.send(FetchEvent::PartFetched(to, task));
 
                 result
             };
@@ -442,6 +422,12 @@ impl<C: HttpClient> Fetcher<C> {
         }
 
         Ok(())
+    }
+
+    fn send(&self, event: FetchEvent) {
+        if let Some(sender) = self.events.as_ref() {
+            let _ = sender.unbounded_send(event);
+        }
     }
 }
 
