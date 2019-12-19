@@ -10,6 +10,9 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 edition = "2018"
 
+[workspace]
+members = [ "fetcher" ]
+
 [dependencies]
 async-std = "1"
 chrono = "0.4"
@@ -27,6 +30,3 @@ thiserror = "1"
 
 surf = { git = "https://github.com/mmstick/surf" }
 http-client = { git = "https://github.com/mmstick/http-client" }
-
-[dev-dependencies]
-better-panic = "0.2.0"

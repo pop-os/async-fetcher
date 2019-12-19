@@ -1,0 +1,24 @@
+[package]
+name = "fetcher"
+version = "0.1.0"
+authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1"
+async-fetcher = { path = "../" }
+async-std = { version = "1" }
+atty = "0.2"
+better-panic = "0.2"
+bytes = "0.5"
+fomat-macros = "0.3"
+futures = "0.3"
+futures_codec = "0.3"
+http-client = { git = "https://github.com/mmstick/http-client" }
+pbr = { git = "https://github.com/mmstick/pb", branch = "dynamic-multibar" }
+ron = "0.5"
+serde = { version = "1", features = [ "derive" ]}
+surf = { git = "https://github.com/mmstick/surf" }
+thiserror = "1"

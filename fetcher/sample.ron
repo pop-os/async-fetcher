@@ -1,0 +1,21 @@
+(
+    urls: ["http://apt.pop-os.org/staging/master/dists/bionic/main/binary-amd64/Packages.gz"], dest: "cache/Packages.gz"
+)
+
+(
+    urls: ["http://apt.pop-os.org/staging/master/dists/bionic/main/source/Sources.gz"], dest: "cache/Sources.gz"
+)
+
+(
+    urls: [
+        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
+    ],
+    dest: "cache/nvidia-i386.deb"
+)
+
+(
+    urls: [
+        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_amd64.deb"
+    ],
+    dest: "cache/nvidia-amd64.deb"
+)

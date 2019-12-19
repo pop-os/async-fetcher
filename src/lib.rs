@@ -77,21 +77,22 @@ pub struct Source {
 }
 
 /// Events which are submitted by the fetcher.
+#[derive(Debug)]
 pub enum FetchEvent {
     /// Signals that this file was already fetched.
-    AlreadyFetched(Arc<Path>),
+    AlreadyFetched,
     /// States that we know the length of the file being fetched.
-    ContentLength(Arc<Path>, u64),
+    ContentLength(u64),
     /// Contains the result of a fetched file.
-    Fetched(Arc<Path>, Result<(), Error>),
+    Fetched(Result<(), Error>),
     /// Notifies that a file is being fetched.
-    Fetching(Arc<Path>),
+    Fetching,
     /// Reports the amount of bytes that have been read for a file.
-    Progress(Arc<Path>, usize),
+    Progress(usize),
     /// Reports that a part of a file is being fetched.
-    PartFetching(Arc<Path>, u16),
+    PartFetching(u16),
     /// Reports that a part has been fetched.
-    PartFetched(Arc<Path>, u16),
+    PartFetched(u16),
 }
 
 /// An asynchronous file fetcher for clients fetching files.
@@ -126,7 +127,7 @@ pub struct Fetcher<C: HttpClient> {
 
     /// Holds a sender for submitting events to.
     #[new(default)]
-    events: Option<Arc<mpsc::UnboundedSender<FetchEvent>>>,
+    events: Option<Arc<mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>>>,
 }
 
 impl Default for Fetcher<NativeClient> {
@@ -142,6 +143,10 @@ impl<C: HttpClient> Fetcher<C> {
     }
 
     /// The maximum number of connections to sustain concurrently per file.
+    ///
+    /// # Note
+    ///
+    /// This setting is required to enable multi-part file downloads.
     pub fn connections_per_file(mut self, connections: u16) -> Self {
         self.connections_per_file =
             if connections > 1 { Some(connections) } else { None };
@@ -150,7 +155,10 @@ impl<C: HttpClient> Fetcher<C> {
     }
 
     /// Attaches a sender, so the caller may receive events from the fetcher.
-    pub fn events(mut self, sender: mpsc::UnboundedSender<FetchEvent>) -> Self {
+    pub fn events(
+        mut self,
+        sender: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
+    ) -> Self {
         self.events = Some(Arc::new(sender));
         self
     }
@@ -206,7 +214,7 @@ impl<C: HttpClient> Fetcher<C> {
                             if metadata.len() == content_length
                                 && ts.as_secs() == last_modified.timestamp() as u64
                             {
-                                self.send(FetchEvent::AlreadyFetched(to));
+                                self.send((to, FetchEvent::AlreadyFetched));
                                 return Ok(());
                             }
 
@@ -237,7 +245,7 @@ impl<C: HttpClient> Fetcher<C> {
 
                 if let Some(length) = length {
                     if supports_range(&self.client, &*uris[0], length).await? {
-                        self.send(FetchEvent::ContentLength(to.clone(), length));
+                        self.send((to.clone(), FetchEvent::ContentLength(length)));
 
                         return self.get_many(length, tasks, uris, to, modified).await;
                     }
@@ -280,7 +288,7 @@ impl<C: HttpClient> Fetcher<C> {
                 let fetcher = self.clone();
 
                 async move {
-                    fetcher.send(FetchEvent::Fetching(source.dest.clone()));
+                    fetcher.send((source.dest.clone(), FetchEvent::Fetching));
 
                     let result = match source.part {
                         Some(part) => {
@@ -300,7 +308,7 @@ impl<C: HttpClient> Fetcher<C> {
                         }
                     };
 
-                    fetcher.send(FetchEvent::Fetched(source.dest.clone(), result));
+                    fetcher.send((source.dest.clone(), FetchEvent::Fetched(result)));
                 }
             })
             .await;
@@ -348,7 +356,7 @@ impl<C: HttpClient> Fetcher<C> {
             };
 
             if read != 0 {
-                self.send(FetchEvent::Progress(dest.clone(), read));
+                self.send((dest.clone(), FetchEvent::Progress(read)));
 
                 file.write_all(&buffer[..read]).await.map_err(Error::Write)?;
             } else {
@@ -398,7 +406,7 @@ impl<C: HttpClient> Fetcher<C> {
 
                 let range = range::to_string(offset, offset_to);
 
-                fetcher.send(FetchEvent::PartFetching(to.clone(), task));
+                fetcher.send((to.clone(), FetchEvent::PartFetching(task)));
 
                 let request =
                     fetcher.client.get(&*uri).set_header("range", range.as_str());
@@ -413,7 +421,7 @@ impl<C: HttpClient> Fetcher<C> {
                     )
                     .await;
 
-                fetcher.send(FetchEvent::PartFetched(to, task));
+                fetcher.send((to, FetchEvent::PartFetched(task)));
 
                 result
             };
@@ -436,7 +444,7 @@ impl<C: HttpClient> Fetcher<C> {
         Ok(())
     }
 
-    fn send(&self, event: FetchEvent) {
+    fn send(&self, event: (Arc<Path>, FetchEvent)) {
         if let Some(sender) = self.events.as_ref() {
             let _ = sender.unbounded_send(event);
         }
