@@ -116,6 +116,10 @@ pub struct Fetcher<C: HttpClient> {
     #[new(default)]
     max_part_size: Option<u64>,
 
+    /// The minimum size of a part file when downloading in parts.
+    #[new(default)]
+    min_part_size: Option<u64>,
+
     /// The time to wait between chunks before giving up.
     #[new(default)]
     timeout: Option<Duration>,
@@ -151,10 +155,15 @@ impl<C: HttpClient> Fetcher<C> {
         self
     }
 
+    /// The minimum size of a part file when downloading in parts.
+    pub fn min_part_size(mut self, bytes: u64) -> Self {
+        self.min_part_size = if bytes == 0 { None } else { Some(bytes) };
+        self
+    }
+
     /// The maximum size of a part file when downloading in parts.
     pub fn max_part_size(mut self, bytes: u64) -> Self {
         self.max_part_size = if bytes == 0 { None } else { Some(bytes) };
-
         self
     }
 
