@@ -114,7 +114,7 @@ pub struct Fetcher<C: HttpClient> {
 
     /// The maximum size of a part file when downloading in parts.
     #[new(default)]
-    part_size: Option<u64>,
+    max_part_size: Option<u64>,
 
     /// The time to wait between chunks before giving up.
     #[new(default)]
@@ -152,8 +152,8 @@ impl<C: HttpClient> Fetcher<C> {
     }
 
     /// The maximum size of a part file when downloading in parts.
-    pub fn part_size(mut self, bytes: u64) -> Self {
-        self.part_size = if bytes == 0 { None } else { Some(bytes) };
+    pub fn max_part_size(mut self, bytes: u64) -> Self {
+        self.max_part_size = if bytes == 0 { None } else { Some(bytes) };
 
         self
     }
