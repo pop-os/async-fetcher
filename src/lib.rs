@@ -13,7 +13,10 @@ use std::{
     fmt::Debug,
     io,
     path::Path,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -39,6 +42,8 @@ use surf::{
 /// An error from the asynchronous file fetcher.
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("task was cancelled")]
+    Cancelled,
     #[error("http client error")]
     Client(#[from] Exception),
     #[error("unable to concatenate fetched parts")]
@@ -119,6 +124,10 @@ pub enum FetchEvent {
 pub struct Fetcher<C: HttpClient> {
     client: Client<C>,
 
+    /// When set, cancels any active operations.
+    #[new(default)]
+    cancel: Option<Arc<AtomicBool>>,
+
     /// The number of files to fetch simultaneously.
     #[new(default)]
     concurrent_files: Option<usize>,
@@ -149,6 +158,12 @@ impl Default for Fetcher<NativeClient> {
 }
 
 impl<C: HttpClient> Fetcher<C> {
+    /// When set, cancels any active operations.
+    pub fn cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel.into());
+        self
+    }
+
     /// The number of files to fetch simultaneously.
     pub fn concurrent_files(mut self, concurrent: usize) -> Self {
         self.concurrent_files = if concurrent > 1 { Some(concurrent) } else { None };
@@ -270,7 +285,7 @@ impl<C: HttpClient> Fetcher<C> {
             }
         }
 
-        let mut request = self.client.get(&*uris[0]);
+        let mut request = self.client.get(&*uris[0]).set_header("Expect", "");
         if let Some(modified_since) = if_modified_since {
             request = request.set_header("if-modified-since", modified_since.as_str());
         }
@@ -280,7 +295,7 @@ impl<C: HttpClient> Fetcher<C> {
                 Ok(path) => path,
                 // Server does not support if-modified-since
                 Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
-                    let request = self.client.get(&*uris[0]);
+                    let request = self.client.get(&*uris[0]).set_header("Expect", "");
                     self.get(&mut modified, request, to.clone(), to, None).await?
                 }
                 Err(why) => return Err(why),
@@ -365,6 +380,10 @@ impl<C: HttpClient> Fetcher<C> {
         let mut read;
 
         loop {
+            if self.cancelled() {
+                return Err(Error::Cancelled);
+            }
+
             let reader = async { response.read(buffer).await.map_err(Error::Write) };
 
             read = match self.timeout {
@@ -425,8 +444,11 @@ impl<C: HttpClient> Fetcher<C> {
 
                 fetcher.send((to.clone(), FetchEvent::PartFetching(task)));
 
-                let request =
-                    fetcher.client.get(&*uri).set_header("range", range.as_str());
+                let request = fetcher
+                    .client
+                    .get(&*uri)
+                    .set_header("range", range.as_str())
+                    .set_header("Expect", "");
 
                 let result = fetcher
                     .get(
@@ -459,6 +481,10 @@ impl<C: HttpClient> Fetcher<C> {
         }
 
         Ok(())
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.as_ref().map_or(false, |cancel| cancel.load(Ordering::SeqCst))
     }
 
     fn send(&self, event: (Arc<Path>, FetchEvent)) {
@@ -502,7 +528,7 @@ async fn head<C: HttpClient>(
     client: &Client<C>,
     uri: &str,
 ) -> Result<Option<Response>, Error> {
-    match validate(client.head(uri).await?).map(Some) {
+    match validate(client.head(uri).set_header("Expect", "").await?).map(Some) {
         result @ Ok(_) => result,
         Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
         Err(other) => Err(other),
@@ -516,6 +542,7 @@ async fn supports_range<C: HttpClient>(
 ) -> Result<bool, Error> {
     let response = client
         .head(uri)
+        .set_header("Expect", "")
         .set_header("range", range::to_string(0, length).as_str())
         .await?;
 
