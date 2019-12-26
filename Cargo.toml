@@ -16,7 +16,8 @@ members = [ "fetcher" ]
 [dependencies]
 async-std = "1"
 chrono = "0.4"
-derive-new = "0"
+derive-new = "0.5"
+derive_setters = "0.1"
 filetime = "0.2"
 futures = "0.3"
 http = "0.1"

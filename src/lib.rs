@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate derive_new;
 #[macro_use]
+extern crate derive_setters;
+#[macro_use]
 extern crate log;
 #[macro_use]
 extern crate thiserror;
@@ -66,14 +68,26 @@ pub enum Error {
 }
 
 /// Information about a source being fetched.
-#[derive(Debug)]
+#[derive(Debug, Setters)]
 pub struct Source {
     /// URLs whereby the file can be found.
+    #[setters(skip)]
     pub urls: Arc<[Box<str>]>,
+
     /// Where the file shall ultimately be fetched to.
+    #[setters(skip)]
     pub dest: Arc<Path>,
+
     /// Optional location to store the partial file
+    #[setters(strip_option)]
+    #[setters(into)]
     pub part: Option<Arc<Path>>,
+}
+
+impl Source {
+    pub fn new(urls: impl Into<Arc<[Box<str>]>>, dest: impl Into<Arc<Path>>) -> Self {
+        Self { urls: urls.into(), dest: dest.into(), part: None }
+    }
 }
 
 /// Events which are submitted by the fetcher.
