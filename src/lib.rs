@@ -195,6 +195,9 @@ impl<C: HttpClient> Fetcher<C> {
         self
     }
 
+    /// Wraps the fetcher in an Arc.
+    pub fn into_arc(self) -> Arc<Self> { Arc::new(self) }
+
     /// Request a file from one or more URIs.
     ///
     /// At least one URI must be provided as a source for the file. Each additional URI

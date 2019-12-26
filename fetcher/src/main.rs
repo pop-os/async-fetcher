@@ -60,26 +60,27 @@ async fn execute<E: Future<Output = ()>>(
     fetch_res
 }
 
+/// The fetcher, which will be used to create futures for fetching files.
 async fn fetcher_stream<S: Unpin + Send + Stream<Item = Source> + 'static>(
     etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
     sources: S,
 ) -> Result<(), FetchError> {
-    // The fetcher, which will be used to create futures for fetching files.
-    let fetcher = Arc::new(
-        Fetcher::new(Client::new())
-            // Download up to 4 files concurrently
-            .concurrent_files(4)
-            // Fetch each file in parts, using up to 4 concurrent connections per file
-            .connections_per_file(4)
-            // Define that a part must be at least this size
-            .min_part_size(1 * 1024)
-            // Define that a part must be no larger than this size
-            .max_part_size(4 * 1024)
-            // Pass in the event sender which events will be sent to
-            .events(etx)
-            // Configure a timeout to bail when a connection stalls for too long
-            .timeout(Duration::from_secs(15)),
-    );
-
-    fetcher.from_stream(sources).await
+    Fetcher::new(Client::new())
+        // Download up to 4 files concurrently
+        .concurrent_files(4)
+        // Fetch each file in parts, using up to 4 concurrent connections per file
+        .connections_per_file(4)
+        // Define that a part must be at least this size
+        .min_part_size(1 * 1024)
+        // Define that a part must be no larger than this size
+        .max_part_size(4 * 1024)
+        // Pass in the event sender which events will be sent to
+        .events(etx)
+        // Configure a timeout to bail when a connection stalls for too long
+        .timeout(Duration::from_secs(15))
+        // Wrap it in an Arc
+        .into_arc()
+        // Then begin fetching from the input stream
+        .from_stream(sources)
+        .await
 }
