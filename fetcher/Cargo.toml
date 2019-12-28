@@ -9,16 +9,21 @@ edition = "2018"
 [dependencies]
 anyhow = "1"
 async-fetcher = { path = "../" }
-async-std = { version = "1" }
+async-std = { version = "1", features = ["unstable"] }
 atty = "0.2"
 better-panic = "0.2"
 bytes = "0.5"
+digest = "0.8"
+enclose = "1"
 fomat-macros = "0.3"
 futures = "0.3"
 futures_codec = "0.3"
+hex = "0.4"
 http-client = { git = "https://github.com/mmstick/http-client" }
+md-5 = "0.8"
 pbr = { git = "https://github.com/mmstick/pb", branch = "dynamic-multibar" }
 ron = "0.5"
 serde = { version = "1", features = [ "derive" ]}
+sha2 = "0.8"
 surf = { git = "https://github.com/mmstick/surf" }
 thiserror = "1"

@@ -1,9 +1,8 @@
-use crate::*;
-use async_fetcher::{Error as FetchError, FetchEvent};
-use futures::{
-    channel::{mpsc, oneshot},
-    prelude::*,
-};
+use crate::{execute, validator::validator};
+
+use async_fetcher::FetchEvent;
+use async_std::task;
+use futures::{channel::mpsc, prelude::*};
 use pbr::{MultiBar, Pipe, ProgressBar, Units};
 use std::{
     collections::HashMap,
@@ -19,80 +18,76 @@ use std::{
 pub fn run(
     etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
     mut erx: mpsc::UnboundedReceiver<(Arc<Path>, FetchEvent)>,
-) -> Result<(), FetchError> {
+) {
     let complete = Arc::new(AtomicBool::new(false));
     let progress = Arc::new(MultiBar::new());
 
-    let (tx, rx) = oneshot::channel();
+    let (result_tx, result_rx) = mpsc::channel(0);
 
-    thread::spawn({
+    let fetcher = {
         let complete = Arc::clone(&complete);
         let progress = Arc::clone(&progress);
-        || {
-            let _ = tx.send(futures::executor::block_on(execute(etx, async move {
-                let mut state = HashMap::<Arc<Path>, ProgressBar<Pipe>>::new();
 
-                while let Some((dest, event)) = erx.next().await {
-                    match event {
-                        FetchEvent::Progress(written) => {
-                            if let Some(bar) = state.get_mut(&dest) {
-                                bar.add(written as u64);
-                            }
+        async move {
+            let mut state = HashMap::<Arc<Path>, ProgressBar<Pipe>>::new();
+
+            while let Some((dest, event)) = erx.next().await {
+                match event {
+                    FetchEvent::Progress(written) => {
+                        if let Some(bar) = state.get_mut(&dest) {
+                            bar.add(written as u64);
                         }
-
-                        FetchEvent::AlreadyFetched => {
-                            if let Some(mut bar) = state.remove(&dest) {
-                                bar.finish_print(&fomat!("Already fetched "(
-                                    dest.display()
-                                )));
-                            }
-                        }
-
-                        FetchEvent::ContentLength(total) => {
-                            state
-                                .entry(dest.clone())
-                                .and_modify(|bar| {
-                                    bar.set(total);
-                                })
-                                .or_insert_with(|| {
-                                    let mut bar = progress.create_bar(total);
-                                    bar.set_units(Units::Bytes);
-                                    bar.message(&fomat!((dest.display()) ": "));
-                                    bar
-                                });
-                        }
-
-                        FetchEvent::Fetched(result) => {
-                            if let Some(mut bar) = state.remove(&dest) {
-                                let message = match result {
-                                    Ok(()) => fomat!("Fetched "(dest.display())),
-                                    Err(why) => {
-                                        let mut message =
-                                            fomat!("Failed " (dest.display()) ": " (why));
-
-                                        let mut source = why.source();
-                                        while let Some(why) = source {
-                                            message.push_str(&fomat!("    caused by: "(
-                                                why
-                                            )));
-                                            source = why.source();
-                                        }
-
-                                        message
-                                    }
-                                };
-
-                                bar.finish_print(&message);
-                            }
-                        }
-
-                        _ => (),
                     }
-                }
 
-                complete.store(true, Ordering::SeqCst);
-            })));
+                    FetchEvent::AlreadyFetched => {
+                        if let Some(mut bar) = state.remove(&dest) {
+                            bar.finish_print(&fomat!("Already fetched "(dest.display())));
+                        }
+                    }
+
+                    FetchEvent::ContentLength(total) => {
+                        state
+                            .entry(dest.clone())
+                            .and_modify(|bar| {
+                                bar.set(total);
+                            })
+                            .or_insert_with(|| {
+                                let mut bar = progress.create_bar(total);
+                                bar.set_units(Units::Bytes);
+                                bar.message(&fomat!((dest.display()) ": "));
+                                bar
+                            });
+                    }
+
+                    FetchEvent::Fetched => {
+                        if let Some(mut bar) = state.remove(&dest) {
+                            bar.finish_print(&fomat!("Fetched "(dest.display())));
+                        }
+                    }
+
+                    _ => (),
+                }
+            }
+
+            complete.store(true, Ordering::SeqCst);
         }
+    };
+
+    let checksum_validator = validator(
+        result_rx,
+        enclose!((progress) move |dest, result| {
+            let progress = progress.clone();
+            async move {
+                &match result {
+                    Ok(()) => epintln!((dest.display()) " was successfully validated"),
+                    Err(why) => epintln!((dest.display()) " failed to validate: " [why]),
+                };
+            }
+        }),
+    );
+
+    let handle = thread::spawn(|| {
+        task::block_on(execute(etx, result_tx, fetcher, checksum_validator))
     });
 
     while !complete.load(Ordering::SeqCst) {
@@ -100,7 +95,7 @@ pub fn run(
         thread::sleep(Duration::from_millis(1000));
     }
 
-    let _ = progress.listen();
+    handle.join();
 
-    futures::executor::block_on(async move { rx.await.unwrap() })
+    let _ = progress.listen();
 }

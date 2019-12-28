@@ -1,18 +1,24 @@
 #[macro_use]
+extern crate enclose;
+#[macro_use]
 extern crate fomat_macros;
+#[macro_use]
+extern crate futures;
 #[macro_use]
 extern crate thiserror;
 
+mod checksum;
 mod inputs;
 mod interactive;
 mod machine;
+mod validator;
+
+use crate::checksum::Checksum;
 
 use async_fetcher::{Error as FetchError, FetchEvent, Fetcher, Source};
-use async_std::fs::File;
+use async_std::{fs::File, task};
 use futures::{channel::mpsc, prelude::*};
 use std::{
-    collections::HashMap,
-    error::Error as _,
     io,
     os::unix::io::{AsRawFd, FromRawFd},
     path::Path,
@@ -26,45 +32,36 @@ fn main() {
 
     let (tx, rx) = mpsc::unbounded::<(Arc<Path>, FetchEvent)>();
 
-    let result = if atty::is(atty::Stream::Stdout) {
+    if atty::is(atty::Stream::Stdout) {
         interactive::run(tx, rx)
     } else {
-        machine::run(tx, rx)
-    };
-
-    // Check the final result of the fetcher.
-    if let Err(why) = result {
-        eprintln!("error occurred: {}", why);
-        let mut source = why.source();
-        while let Some(why) = source {
-            eprintln!("    caused by: {}", why);
-            source = why.source();
-        }
-
-        std::process::exit(1);
+        task::block_on(machine::run(tx, rx))
     }
 }
 
-async fn execute<E: Future<Output = ()>>(
+async fn execute<E: Future<Output = ()>, R: Future<Output = ()>>(
     etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
+    result_tx: mpsc::Sender<(Arc<Path>, Result<Option<Checksum>, FetchError>)>,
     event_handler: E,
-) -> Result<(), FetchError> {
+    result_handler: R,
+) {
     let stdin = io::stdin();
     let stdin = stdin.lock();
 
     let input_stream = inputs::stream(unsafe { File::from_raw_fd(stdin.as_raw_fd()) });
+    let fetcher_stream = fetcher_stream(etx, result_tx, input_stream).boxed_local();
 
-    let (_, fetch_res) =
-        futures::join!(event_handler, fetcher_stream(etx, input_stream).boxed_local(),);
-
-    fetch_res
+    let _ = futures::join!(event_handler, result_handler, fetcher_stream);
 }
 
 /// The fetcher, which will be used to create futures for fetching files.
-async fn fetcher_stream<S: Unpin + Send + Stream<Item = Source> + 'static>(
-    etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
+async fn fetcher_stream<
+    S: Unpin + Send + Stream<Item = (Source, Option<Checksum>)> + 'static,
+>(
+    event_sender: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
+    result_sender: mpsc::Sender<(Arc<Path>, Result<Option<Checksum>, FetchError>)>,
     sources: S,
-) -> Result<(), FetchError> {
+) {
     Fetcher::new(Client::new())
         // Download up to 4 files concurrently
         .concurrent_files(4)
@@ -75,12 +72,19 @@ async fn fetcher_stream<S: Unpin + Send + Stream<Item = Source> + 'static>(
         // Define that a part must be no larger than this size
         .max_part_size(4 * 1024)
         // Pass in the event sender which events will be sent to
-        .events(etx)
+        .events(event_sender)
         // Configure a timeout to bail when a connection stalls for too long
         .timeout(Duration::from_secs(15))
         // Wrap it in an Arc
         .into_arc()
         // Then begin fetching from the input stream
-        .from_stream(sources)
-        .await
+        .from_stream(sources, move |path, result| {
+            let mut tx = result_sender.clone();
+            async move {
+                tx.send((path, result)).await;
+                true
+            }
+        })
+        // Commit the awaiter
+        .await;
 }

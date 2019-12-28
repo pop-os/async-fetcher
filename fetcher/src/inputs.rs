@@ -1,11 +1,12 @@
-use bytes::BytesMut;
-use futures_codec::{Decoder, FramedRead};
+use crate::checksum::{Checksum, SumString};
 
 use async_fetcher::Source;
 use async_std::fs::File;
+use bytes::BytesMut;
 use futures::prelude::*;
+use futures_codec::{Decoder, FramedRead};
 use serde::Deserialize;
-use std::{io, path::PathBuf};
+use std::{convert::TryFrom, io, path::PathBuf};
 
 #[derive(Debug, Error)]
 pub enum InputError {
@@ -55,9 +56,12 @@ struct Input {
     urls: Vec<Box<str>>,
     dest: String,
     part: Option<String>,
+    sum:  Option<SumString>,
 }
 
-pub fn stream(input: File) -> impl Stream<Item = Source> + Send + Unpin {
+pub fn stream(
+    input: File,
+) -> impl Stream<Item = (Source, Option<Checksum>)> + Send + Unpin {
     FramedRead::new(input, Inputs::default())
         .filter_map(|result| async move {
             match result {
@@ -68,7 +72,18 @@ pub fn stream(input: File) -> impl Stream<Item = Source> + Send + Unpin {
                         source = source.part(PathBuf::from(part));
                     }
 
-                    Some(source)
+                    let sum = match input.sum {
+                        Some(sum) => match Checksum::try_from(sum) {
+                            Ok(sum) => Some(sum),
+                            Err(why) => {
+                                eprintln!("invalid checksum: {}", why);
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+
+                    Some((source, sum))
                 }
                 Err(InputError::Read(why)) => {
                     epintln!("read error: "(why));
