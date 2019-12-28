@@ -13,6 +13,7 @@ use std::{
     fmt::Debug,
     io,
     path::Path,
+    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -30,6 +31,7 @@ use chrono::{DateTime, Utc};
 use filetime::FileTime;
 use futures::{
     channel::mpsc,
+    sink::SinkExt,
     stream::{FuturesOrdered, StreamExt},
 };
 use http::StatusCode;
@@ -102,8 +104,8 @@ pub enum FetchEvent {
     AlreadyFetched,
     /// States that we know the length of the file being fetched.
     ContentLength(u64),
-    /// Contains the result of a fetched file.
-    Fetched(Result<(), Error>),
+    /// Notifies that the file has been fetched.
+    Fetched,
     /// Notifies that a file is being fetched.
     Fetching,
     /// Reports the amount of bytes that have been read for a file.
@@ -311,41 +313,39 @@ impl<C: HttpClient> Fetcher<C> {
     }
 
     /// Requests many files from many URIs.
-    pub async fn from_stream<S>(self: Arc<Self>, sources: S) -> Result<(), Error>
+    pub async fn from_stream<E, R, F, S>(self: Arc<Self>, sources: S, results: F)
     where
-        S: Stream<Item = Source> + Unpin + Send + 'static,
+        R: Fn(Arc<Path>, Result<T, Error>) -> FS + 'static,
+        F: Future<Output = bool>,
+        S: Stream<Item = (Source, T)> + Unpin + Send + 'static,
     {
-        let _ = sources
-            .for_each_concurrent(self.concurrent_files.unwrap_or(4), |source| {
+        let results = Rc::new(results);
+
+        sources
+            .for_each_concurrent(self.concurrent_files, move |(source, extra)| {
                 let fetcher = self.clone();
-
+                let results = Rc::clone(&results);
                 async move {
-                    fetcher.send((source.dest.clone(), FetchEvent::Fetching));
+                    let Source { dest, urls, part, .. } = source;
+                    fetcher.send((dest.clone(), FetchEvent::Fetching));
 
-                    let result = match source.part {
+                    let result = match part {
                         Some(part) => {
-                            match fetcher.clone().request(source.urls, part.clone()).await
-                            {
-                                Ok(()) => fs::rename(&*part, &*source.dest)
+                            match fetcher.clone().request(urls, part.clone()).await {
+                                Ok(()) => fs::rename(&*part, &*dest)
                                     .await
                                     .map_err(Error::Rename),
                                 Err(why) => Err(why),
                             }
                         }
-                        None => {
-                            fetcher
-                                .clone()
-                                .request(source.urls, source.dest.clone())
-                                .await
-                        }
+                        None => fetcher.clone().request(urls, dest.clone()).await,
                     };
 
-                    fetcher.send((source.dest.clone(), FetchEvent::Fetched(result)));
+                    fetcher.send((dest.clone(), FetchEvent::Fetched));
+                    results(dest, result.map(|_| extra)).await;
                 }
             })
-            .await;
-
-        Ok(())
+            .await
     }
 
     async fn get(
