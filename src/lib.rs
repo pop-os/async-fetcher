@@ -42,6 +42,7 @@ use surf::{
     headers::Headers, middleware::HttpClient, Client, Exception, Request, Response,
 };
 
+pub type EventSender = mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>;
 pub type Output<T> = (Arc<Path>, Result<T, Error>);
 
 /// An error from the asynchronous file fetcher.
@@ -125,33 +126,45 @@ pub enum FetchEvent {
 /// runtimes, allowing you to choose between the runtime that works best for your
 /// application. A single-threaded runtime is generally recommended for fetching files,
 /// as your network connection is unlikely to be faster than a single CPU core.
-#[derive(new)]
+#[derive(new, Setters)]
 pub struct Fetcher<C: HttpClient> {
+    #[setters(skip)]
     client: Client<C>,
 
     /// When set, cancels any active operations.
     #[new(default)]
+    #[setters(strip_option)]
     cancel: Option<Arc<AtomicBool>>,
 
     /// The number of concurrent connections to sustain per file being fetched.
     #[new(default)]
+    #[setters(skip)]
     connections_per_file: Option<u16>,
 
     /// The maximum size of a part file when downloading in parts.
     #[new(default)]
+    #[setters(skip)]
     max_part_size: Option<u64>,
 
     /// The minimum size of a part file when downloading in parts.
     #[new(default)]
+    #[setters(skip)]
     min_part_size: Option<u64>,
 
     /// The time to wait between chunks before giving up.
     #[new(default)]
+    #[setters(skip)]
     timeout: Option<Duration>,
+
+    /// The number of attempts to make when a request fails.
+    #[new(value = "3")]
+    retries: u64,
 
     /// Holds a sender for submitting events to.
     #[new(default)]
-    events: Option<Arc<mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>>>,
+    #[setters(into)]
+    #[setters(strip_option)]
+    events: Option<Arc<EventSender>>,
 }
 
 impl Default for Fetcher<NativeClient> {
@@ -159,12 +172,6 @@ impl Default for Fetcher<NativeClient> {
 }
 
 impl<C: HttpClient> Fetcher<C> {
-    /// When set, cancels any active operations.
-    pub fn cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
-        self.cancel = Some(cancel.into());
-        self
-    }
-
     /// The maximum number of connections to sustain concurrently per file.
     ///
     /// # Note
@@ -174,15 +181,6 @@ impl<C: HttpClient> Fetcher<C> {
         self.connections_per_file =
             if connections > 1 { Some(connections) } else { None };
 
-        self
-    }
-
-    /// Attaches a sender, so the caller may receive events from the fetcher.
-    pub fn events(
-        mut self,
-        sender: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
-    ) -> Self {
-        self.events = Some(Arc::new(sender));
         self
     }
 
@@ -212,6 +210,26 @@ impl<C: HttpClient> Fetcher<C> {
     /// At least one URI must be provided as a source for the file. Each additional URI
     /// serves as a mirror for failover and load-balancing purposes.
     pub async fn request(
+        self: Arc<Self>,
+        uris: Arc<[Box<str>]>,
+        to: Arc<Path>,
+    ) -> Result<(), Error> {
+        match self.clone().inner_request(uris.clone(), to.clone()).await {
+            Ok(()) => Ok(()),
+            Err(mut why) => {
+                for _ in 1..self.retries {
+                    match self.clone().inner_request(uris.clone(), to.clone()).await {
+                        Ok(()) => return Ok(()),
+                        Err(cause) => why = cause,
+                    }
+                }
+
+                Err(why)
+            }
+        }
+    }
+
+    async fn inner_request(
         self: Arc<Self>,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
