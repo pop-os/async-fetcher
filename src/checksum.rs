@@ -20,21 +20,35 @@ pub enum ChecksumError {
     IO(#[from] io::Error),
 }
 
+pub enum SumStr<'a> {
+    Md5(&'a str),
+    Sha256(&'a str),
+}
+
 #[derive(Deserialize)]
-pub enum SumString {
+pub enum SumStrBuf {
     Md5(String),
     Sha256(String),
 }
 
-impl TryFrom<SumString> for Checksum {
+impl SumStrBuf {
+    pub fn as_ref<'a>(&'a self) -> SumStr<'a> {
+        match self {
+            SumStrBuf::Md5(string) => SumStr::Md5(string.as_str()),
+            SumStrBuf::Sha256(string) => SumStr::Sha256(string.as_str()),
+        }
+    }
+}
+
+impl<'a> TryFrom<SumStr<'a>> for Checksum {
     type Error = hex::FromHexError;
 
-    fn try_from(input: SumString) -> Result<Self, Self::Error> {
+    fn try_from(input: SumStr) -> Result<Self, Self::Error> {
         match input {
-            SumString::Md5(sum) => {
+            SumStr::Md5(sum) => {
                 <[u8; 16]>::from_hex(sum).map(GenericArray::from).map(Checksum::Md5)
             }
-            SumString::Sha256(sum) => {
+            SumStr::Sha256(sum) => {
                 <[u8; 32]>::from_hex(sum).map(GenericArray::from).map(Checksum::Sha256)
             }
         }

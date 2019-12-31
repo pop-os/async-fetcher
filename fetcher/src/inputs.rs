@@ -1,4 +1,4 @@
-use crate::checksum::{Checksum, SumString};
+use crate::checksum::{Checksum, SumStrBuf};
 
 use async_fetcher::Source;
 use async_std::fs::File;
@@ -56,7 +56,7 @@ struct Input {
     urls: Vec<Box<str>>,
     dest: String,
     part: Option<String>,
-    sum:  Option<SumString>,
+    sum:  Option<SumStrBuf>,
 }
 
 pub fn stream(
@@ -73,7 +73,7 @@ pub fn stream(
                     }
 
                     let sum = match input.sum {
-                        Some(sum) => match Checksum::try_from(sum) {
+                        Some(sum) => match Checksum::try_from(sum.as_ref()) {
                             Ok(sum) => Some(sum),
                             Err(why) => {
                                 eprintln!("invalid checksum: {}", why);
