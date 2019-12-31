@@ -28,23 +28,27 @@ impl ChecksumSystem {
 
             async move {
                 let buf = &mut **pool.get();
-
-                let result = match File::open(&*dest).await {
-                    Ok(file) => match checksum.validate(file, buf).await {
-                        Ok(()) => Ok(()),
-                        Err(why) => Err(ChecksummerError::Checksum(why)),
-                    },
-                    Err(why) => Err(ChecksummerError::Open(why)),
-                };
-
-                match result {
-                    Ok(()) => (dest, Ok(())),
-                    Err(why) => {
-                        let _ = fs::remove_file(&*dest).await;
-                        (dest, Err(why))
-                    }
-                }
+                let result = validate_checksum(buf, &dest, &checksum).await;
+                (dest, result)
             }
         })
     }
+}
+
+/// Validates the checksum of a single file
+pub async fn validate_checksum(
+    buf: &mut [u8],
+    dest: &Path,
+    checksum: &Checksum,
+) -> Result<(), ChecksummerError> {
+    let error = match File::open(&*dest).await {
+        Ok(file) => match checksum.validate(file, buf).await {
+            Ok(()) => return Ok(()),
+            Err(why) => ChecksummerError::Checksum(why),
+        },
+        Err(why) => ChecksummerError::Open(why),
+    };
+
+    let _ = fs::remove_file(&*dest).await;
+    Err(error)
 }
