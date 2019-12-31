@@ -1,7 +1,7 @@
 use crate::{Error, FetchEvent, Fetcher, Source};
 
 use async_std::fs;
-use futures::{channel::mpsc, prelude::*};
+use futures::prelude::*;
 use std::{path::Path, sync::Arc};
 use surf::middleware::HttpClient;
 
