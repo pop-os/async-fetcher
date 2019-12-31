@@ -21,7 +21,7 @@ futures_codec = "0.3"
 hex = "0.4"
 http-client = { git = "https://github.com/mmstick/http-client" }
 md-5 = "0.8"
-pbr = { git = "https://github.com/mmstick/pb", branch = "dynamic-multibar" }
+pbr = { git = "https://github.com/a8m/pb" }
 ron = "0.5"
 serde = { version = "1", features = [ "derive" ]}
 sha2 = "0.8"

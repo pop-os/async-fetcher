@@ -1,8 +1,8 @@
-use crate::{execute, validator::validator};
+use crate::execute;
 
-use async_fetcher::FetchEvent;
+use async_fetcher::{ChecksumSystem, FetchEvent};
 use async_std::task;
-use futures::{channel::mpsc, prelude::*};
+use futures::{channel::mpsc, executor, prelude::*};
 use pbr::{MultiBar, Pipe, ProgressBar, Units};
 use std::{
     collections::HashMap,
@@ -21,8 +21,6 @@ pub fn run(
 ) {
     let complete = Arc::new(AtomicBool::new(false));
     let progress = Arc::new(MultiBar::new());
-
-    let (result_tx, result_rx) = mpsc::channel(0);
 
     let fetcher = {
         let complete = Arc::clone(&complete);
@@ -73,21 +71,43 @@ pub fn run(
         }
     };
 
-    let checksum_validator = validator(
-        result_rx,
-        enclose!((progress) move |dest, result| {
-            let progress = progress.clone();
-            async move {
-                &match result {
-                    Ok(()) => epintln!((dest.display()) " was successfully validated"),
-                    Err(why) => epintln!((dest.display()) " failed to validate: " [why]),
-                };
+    let (fetch_tx, mut fetch_rx) = mpsc::channel::<(Arc<Path>, _)>(0);
+    let fetch_results = async move {
+        while let Some((dest, result)) = fetch_rx.next().await {
+            match result {
+                Ok(false) => epintln!((dest.display()) " was successfully fetched"),
+                Ok(true) => epintln!((dest.display()) " is now validating"),
+                Err(why) => epintln!((dest.display()) " failed: " [why]),
             }
-        }),
-    );
+        }
+    };
+
+    let (sum_tx, sum_rx) = mpsc::channel::<(Arc<Path>, _)>(0);
+    let sum_results = async move {
+        let mut stream = ChecksumSystem::new()
+            .build(sum_rx)
+            // Distribute each checksum future across a thread pool.
+            .map(|future| task::spawn_blocking(|| executor::block_on(future)))
+            // Limiting up to 32 concurrent tasks at a time.
+            .buffer_unordered(32);
+
+        while let Some((dest, result)) = stream.next().await {
+            match result {
+                Ok(()) => epintln!((dest.display()) " was successfully validated"),
+                Err(why) => epintln!((dest.display()) " failed to validate: " [why]),
+            }
+        }
+    };
 
     let handle = thread::spawn(|| {
-        task::block_on(execute(etx, result_tx, fetcher, checksum_validator))
+        task::block_on(async move {
+            join!(
+                fetcher,
+                fetch_results,
+                sum_results,
+                execute(etx, fetch_tx, sum_tx).boxed_local(),
+            )
+        })
     });
 
     while !complete.load(Ordering::SeqCst) {

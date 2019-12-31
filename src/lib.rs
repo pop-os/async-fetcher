@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"]
+
 #[macro_use]
 extern crate derive_new;
 #[macro_use]
@@ -7,13 +9,17 @@ extern crate log;
 #[macro_use]
 extern crate thiserror;
 
+pub mod checksum;
 mod range;
+mod systems;
+
+pub use self::systems::{ChecksumSystem, FetcherSystem};
 
 use std::{
     fmt::Debug,
     io,
+    iter::FromIterator,
     path::Path,
-    rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -23,23 +29,20 @@ use std::{
 
 use async_std::{
     fs::{self, File},
-    io::copy,
     prelude::*,
 };
 
 use chrono::{DateTime, Utc};
 use filetime::FileTime;
-use futures::{
-    channel::mpsc,
-    sink::SinkExt,
-    stream::{FuturesOrdered, StreamExt},
-};
+use futures::{channel::mpsc, stream::FuturesOrdered};
 use http::StatusCode;
 use http_client::native::NativeClient;
 use numtoa::NumToA;
 use surf::{
     headers::Headers, middleware::HttpClient, Client, Exception, Request, Response,
 };
+
+pub type Output<T> = (Arc<Path>, Result<T, Error>);
 
 /// An error from the asynchronous file fetcher.
 #[derive(Debug, Error)]
@@ -130,10 +133,6 @@ pub struct Fetcher<C: HttpClient> {
     #[new(default)]
     cancel: Option<Arc<AtomicBool>>,
 
-    /// The number of files to fetch simultaneously.
-    #[new(default)]
-    concurrent_files: Option<usize>,
-
     /// The number of concurrent connections to sustain per file being fetched.
     #[new(default)]
     connections_per_file: Option<u16>,
@@ -163,13 +162,6 @@ impl<C: HttpClient> Fetcher<C> {
     /// When set, cancels any active operations.
     pub fn cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
         self.cancel = Some(cancel.into());
-        self
-    }
-
-    /// The number of files to fetch simultaneously.
-    pub fn concurrent_files(mut self, concurrent: usize) -> Self {
-        self.concurrent_files = if concurrent > 1 { Some(concurrent) } else { None };
-
         self
     }
 
@@ -312,42 +304,6 @@ impl<C: HttpClient> Fetcher<C> {
         Ok(())
     }
 
-    /// Requests many files from many URIs.
-    pub async fn from_stream<E, R, F, S>(self: Arc<Self>, sources: S, results: F)
-    where
-        R: Fn(Arc<Path>, Result<T, Error>) -> FS + 'static,
-        F: Future<Output = bool>,
-        S: Stream<Item = (Source, T)> + Unpin + Send + 'static,
-    {
-        let results = Rc::new(results);
-
-        sources
-            .for_each_concurrent(self.concurrent_files, move |(source, extra)| {
-                let fetcher = self.clone();
-                let results = Rc::clone(&results);
-                async move {
-                    let Source { dest, urls, part, .. } = source;
-                    fetcher.send((dest.clone(), FetchEvent::Fetching));
-
-                    let result = match part {
-                        Some(part) => {
-                            match fetcher.clone().request(urls, part.clone()).await {
-                                Ok(()) => fs::rename(&*part, &*dest)
-                                    .await
-                                    .map_err(Error::Rename),
-                                Err(why) => Err(why),
-                            }
-                        }
-                        None => fetcher.clone().request(urls, dest.clone()).await,
-                    };
-
-                    fetcher.send((dest.clone(), FetchEvent::Fetched));
-                    results(dest, result.map(|_| extra)).await;
-                }
-            })
-            .await
-    }
-
     async fn get(
         &self,
         modified: &mut Option<DateTime<Utc>>,
@@ -416,15 +372,11 @@ impl<C: HttpClient> Fetcher<C> {
 
         let mut buf = [0u8; 20];
 
-        let mut parts = FuturesOrdered::new();
-
         // The destination which parts will be concatenated to.
         let concatenated_file =
             &mut File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
 
-        // Create a future for each part to be fetched, and append it to the `parts`
-        // stream.
-        for task in 0..tasks {
+        let parts = FuturesOrdered::from_iter((0..tasks).map(|task| {
             let uri = uris[task as usize % uris.len()].clone();
 
             let part_path = {
@@ -436,7 +388,7 @@ impl<C: HttpClient> Fetcher<C> {
             let fetcher = self.clone();
             let to = to.clone();
 
-            let future = async move {
+            async move {
                 let (offset, offset_to) =
                     range::calc(length, tasks as u64, task as u64).unwrap_or((0, 0));
 
@@ -463,16 +415,10 @@ impl<C: HttpClient> Fetcher<C> {
                 fetcher.send((to, FetchEvent::PartFetched(task)));
 
                 result
-            };
+            }
+        }));
 
-            parts.push(future);
-        }
-
-        // Then concatenate those task's files as soon as they are done.
-        while let Some(task_result) = parts.next().await {
-            let part_path: Arc<Path> = task_result?;
-            concatenate(concatenated_file, part_path).await?;
-        }
+        systems::concatenator(concatenated_file, parts).await?;
 
         if let Some(modified) = modified {
             let filetime = FileTime::from_unix_time(modified.timestamp(), 0);
@@ -492,25 +438,6 @@ impl<C: HttpClient> Fetcher<C> {
             let _ = sender.unbounded_send(event);
         }
     }
-}
-
-async fn concatenate(
-    concatenated_file: &mut File,
-    part_path: Arc<Path>,
-) -> Result<(), Error> {
-    {
-        let mut file = File::open(&*part_path)
-            .await
-            .map_err(|why| Error::OpenPart(part_path.clone(), why))?;
-
-        copy(&mut file, concatenated_file).await.map_err(Error::Concatenate)?;
-    }
-
-    if let Err(why) = fs::remove_file(&*part_path).await {
-        error!("failed to remove part file ({:?}): {}", part_path, why);
-    }
-
-    Ok(())
 }
 
 fn content_length(headers: &Headers) -> Option<u64> {

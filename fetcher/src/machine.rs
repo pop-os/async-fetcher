@@ -1,7 +1,8 @@
-use crate::{execute, validator::validator};
+use crate::execute;
 
-use async_fetcher::FetchEvent;
-use futures::{channel::mpsc, prelude::*};
+use async_fetcher::{ChecksumSystem, FetchEvent};
+use async_std::task;
+use futures::{channel::mpsc, executor, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -15,11 +16,11 @@ pub async fn run(
     etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
     mut erx: mpsc::UnboundedReceiver<(Arc<Path>, FetchEvent)>,
 ) {
-    let (events_tx, mut events_rx) = mpsc::channel(0);
-    let (result_tx, result_rx) = mpsc::channel(0);
-    let mut events_tx_ = events_tx.clone();
+    let (mut events_tx, mut events_rx) = mpsc::channel(0);
 
-    let fetcher = async move {
+    // Handles all callback events from the fetcher
+    let mut events_tx_ = events_tx.clone();
+    let fetch_events = async move {
         let mut state = HashMap::<Arc<Path>, (u64, u64, Instant)>::new();
 
         while let Some((dest, event)) = erx.next().await {
@@ -75,9 +76,42 @@ pub async fn run(
         }
     };
 
-    let checksum_validator = validator(result_rx, move |dest, result| {
-        let mut events_tx = events_tx.clone();
-        async move {
+    // Handles all results from the fetcher.
+    let mut events_tx_ = events_tx.clone();
+    let (fetch_tx, mut fetch_rx) = mpsc::channel::<(Arc<Path>, _)>(0);
+    let fetch_results = async move {
+        while let Some((dest, result)) = fetch_rx.next().await {
+            let event = match result {
+                Ok(false) => None,
+                Ok(true) => {
+                    Some(Output(fomat!((dest.display())), OutputEvent::Validating))
+                }
+                Err(why) => {
+                    epintln!((dest.display()) " failed to validate: " [why]);
+
+                    Some(Output(fomat!((dest.display())), OutputEvent::Failed))
+                }
+            };
+
+            if let Some(event) = event {
+                if events_tx_.send(event).await.is_err() {
+                    break;
+                }
+            }
+        }
+    };
+
+    // Handles all results from checksum operations.
+    let (sum_tx, sum_rx) = mpsc::channel::<(Arc<Path>, _)>(0);
+    let sum_results = async move {
+        let mut stream = ChecksumSystem::new()
+            .build(sum_rx)
+            // Distribute each checksum future across a thread pool.
+            .map(|future| task::spawn_blocking(|| executor::block_on(future)))
+            // Limiting up to 32 concurrent tasks at a time.
+            .buffer_unordered(32);
+
+        while let Some((dest, result)) = stream.next().await {
             let event = match result {
                 Ok(()) => Output(fomat!((dest.display())), OutputEvent::Validated),
 
@@ -88,10 +122,13 @@ pub async fn run(
                 }
             };
 
-            events_tx.send(event).await;
+            if events_tx.send(event).await.is_err() {
+                break;
+            }
         }
-    });
+    };
 
+    // Centrally writes all events to standard out.
     let stdout_writer = async move {
         let output = io::stdout();
         let mut output = output.lock();
@@ -116,7 +153,10 @@ pub async fn run(
 
     let _ = join!(
         stdout_writer,
-        execute(etx, result_tx, fetcher, checksum_validator).boxed_local()
+        fetch_results,
+        sum_results,
+        fetch_events,
+        execute(etx, fetch_tx, sum_tx).boxed_local()
     );
 }
 
@@ -126,10 +166,12 @@ pub struct Output(String, OutputEvent);
 #[derive(Deserialize, Serialize)]
 pub enum OutputEvent {
     AlreadyFetched,
+    Failed,
     Fetched,
     Fetching,
     Invalid,
     Length(u64),
     Progress(u64, u64),
     Validated,
+    Validating,
 }
