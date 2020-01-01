@@ -1,14 +1,29 @@
 use numtoa::NumToA;
+use std::num::NonZeroU64;
 
-pub(crate) fn calc(length: u64, nthreads: u64, part: u64) -> Option<(u64, u64)> {
-    if length == 0 || nthreads == 1 {
-        None
-    } else {
-        let section = length / nthreads;
-        let from = part * section;
-        let to = if part + 1 == nthreads { length } else { (part + 1) * section } - 1;
-        Some((from, to))
-    }
+pub fn generate(
+    mut length: u64,
+    max_part_size: NonZeroU64,
+) -> impl Iterator<Item = (u64, u64)> {
+    let mut offset = 0u64;
+
+    std::iter::from_fn(move || {
+        if length == 0 {
+            return None;
+        }
+
+        let next;
+        if length > max_part_size.get() {
+            next = (offset, offset + max_part_size.get() - 1);
+            offset += max_part_size.get();
+            length -= max_part_size.get()
+        } else {
+            next = (offset, offset + length - 1);
+            length = 0;
+        }
+
+        Some(next)
+    })
 }
 
 pub(crate) fn to_string(from: u64, to: u64) -> String {

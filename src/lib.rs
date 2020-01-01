@@ -18,7 +18,7 @@ pub use self::systems::*;
 use std::{
     fmt::Debug,
     io,
-    iter::FromIterator,
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -34,7 +34,10 @@ use async_std::{
 
 use chrono::{DateTime, Utc};
 use filetime::FileTime;
-use futures::{channel::mpsc, stream::FuturesOrdered};
+use futures::{
+    channel::mpsc,
+    stream::{self, StreamExt},
+};
 use http::StatusCode;
 use http_client::native::NativeClient;
 use numtoa::NumToA;
@@ -115,9 +118,9 @@ pub enum FetchEvent {
     /// Reports the amount of bytes that have been read for a file.
     Progress(usize),
     /// Reports that a part of a file is being fetched.
-    PartFetching(u16),
+    PartFetching(u64),
     /// Reports that a part has been fetched.
-    PartFetched(u16),
+    PartFetched(u64),
 }
 
 /// An asynchronous file fetcher for clients fetching files.
@@ -138,27 +141,20 @@ pub struct Fetcher<C: HttpClient> {
 
     /// The number of concurrent connections to sustain per file being fetched.
     #[new(default)]
-    #[setters(skip)]
-    connections_per_file: Option<u16>,
+    connections_per_file: Option<NonZeroU16>,
+
+    /// The number of attempts to make when a request fails.
+    #[new(value = "unsafe { NonZeroU16::new_unchecked(3) } ")]
+    retries: NonZeroU16,
 
     /// The maximum size of a part file when downloading in parts.
-    #[new(default)]
-    #[setters(skip)]
-    max_part_size: Option<u64>,
-
-    /// The minimum size of a part file when downloading in parts.
-    #[new(default)]
-    #[setters(skip)]
-    min_part_size: Option<u64>,
+    #[new(value = "unsafe { NonZeroU32::new_unchecked(2 * 1024 * 1024) }")]
+    max_part_size: NonZeroU32,
 
     /// The time to wait between chunks before giving up.
     #[new(default)]
-    #[setters(skip)]
+    #[setters(strip_option)]
     timeout: Option<Duration>,
-
-    /// The number of attempts to make when a request fails.
-    #[new(value = "3")]
-    retries: u64,
 
     /// Holds a sender for submitting events to.
     #[new(default)]
@@ -172,36 +168,6 @@ impl Default for Fetcher<NativeClient> {
 }
 
 impl<C: HttpClient> Fetcher<C> {
-    /// The maximum number of connections to sustain concurrently per file.
-    ///
-    /// # Note
-    ///
-    /// This setting is required to enable multi-part file downloads.
-    pub fn connections_per_file(mut self, connections: u16) -> Self {
-        self.connections_per_file =
-            if connections > 1 { Some(connections) } else { None };
-
-        self
-    }
-
-    /// The minimum size of a part file when downloading in parts.
-    pub fn min_part_size(mut self, bytes: u64) -> Self {
-        self.min_part_size = if bytes == 0 { None } else { Some(bytes) };
-        self
-    }
-
-    /// The maximum size of a part file when downloading in parts.
-    pub fn max_part_size(mut self, bytes: u64) -> Self {
-        self.max_part_size = if bytes == 0 { None } else { Some(bytes) };
-        self
-    }
-
-    /// Amount of time to wait between a read before giving up.
-    pub fn timeout(mut self, duration: Duration) -> Self {
-        self.timeout = Some(duration);
-        self
-    }
-
     /// Wraps the fetcher in an Arc.
     pub fn into_arc(self) -> Arc<Self> { Arc::new(self) }
 
@@ -217,7 +183,7 @@ impl<C: HttpClient> Fetcher<C> {
         match self.clone().inner_request(uris.clone(), to.clone()).await {
             Ok(()) => Ok(()),
             Err(mut why) => {
-                for _ in 1..self.retries {
+                for _ in 1..self.retries.get() {
                     match self.clone().inner_request(uris.clone(), to.clone()).await {
                         Ok(()) => return Ok(()),
                         Err(cause) => why = cause,
@@ -278,7 +244,7 @@ impl<C: HttpClient> Fetcher<C> {
         }
 
         // If set, this will use multiple connections to download a file in parts.
-        if let Some(tasks) = self.connections_per_file {
+        if let Some(connections) = self.connections_per_file {
             if let Some(mut response) = head(&self.client, &*uris[0]).await? {
                 let headers = &(response.headers());
                 modified = last_modified(headers);
@@ -291,7 +257,9 @@ impl<C: HttpClient> Fetcher<C> {
                     if supports_range(&self.client, &*uris[0], length).await? {
                         self.send((to.clone(), FetchEvent::ContentLength(length)));
 
-                        return self.get_many(length, tasks, uris, to, modified).await;
+                        return self
+                            .get_many(length, connections.get(), uris, to, modified)
+                            .await;
                     }
                 }
             }
@@ -380,7 +348,7 @@ impl<C: HttpClient> Fetcher<C> {
     async fn get_many(
         self: Arc<Self>,
         length: u64,
-        tasks: u16,
+        concurrent: u16,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         mut modified: Option<DateTime<Utc>>,
@@ -394,47 +362,56 @@ impl<C: HttpClient> Fetcher<C> {
         let concatenated_file =
             &mut File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
 
-        let parts = FuturesOrdered::from_iter((0..tasks).map(|task| {
-            let uri = uris[task as usize % uris.len()].clone();
+        let max_part_size =
+            unsafe { NonZeroU64::new_unchecked(u64::from(self.max_part_size.get())) };
 
-            let part_path = {
-                let mut new_filename = filename.to_os_string();
-                new_filename.push(&[".part", task.numtoa_str(10, &mut buf)].concat());
-                parent.join(new_filename)
-            };
+        let to_ = to.clone();
+        let parts = stream::iter(range::generate(length, max_part_size).enumerate())
+            // Generate a future for fetching each part that a range describes.
+            .map(move |(partn, (range_start, range_end))| {
+                let uri = uris[partn % uris.len()].clone();
 
-            let fetcher = self.clone();
-            let to = to.clone();
+                let part_path = {
+                    let mut new_filename = filename.to_os_string();
+                    new_filename
+                        .push(&[".part", partn.numtoa_str(10, &mut buf)].concat());
+                    parent.join(new_filename)
+                };
 
-            async move {
-                let (offset, offset_to) =
-                    range::calc(length, tasks as u64, task as u64).unwrap_or((0, 0));
+                let fetcher = self.clone();
+                let to = to_.clone();
 
-                let range = range::to_string(offset, offset_to);
+                async move {
+                    let range = range::to_string(range_start, range_end);
 
-                fetcher.send((to.clone(), FetchEvent::PartFetching(task)));
+                    fetcher.send((to.clone(), FetchEvent::PartFetching(partn as u64)));
 
-                let request = fetcher
-                    .client
-                    .get(&*uri)
-                    .set_header("range", range.as_str())
-                    .set_header("Expect", "");
+                    let request = fetcher
+                        .client
+                        .get(&*uri)
+                        .set_header("range", range.as_str())
+                        .set_header("Expect", "");
 
-                let result = fetcher
-                    .get(
-                        &mut modified,
-                        request,
-                        part_path.into(),
-                        to.clone(),
-                        Some(offset_to - offset),
-                    )
-                    .await;
+                    let result = fetcher
+                        .get(
+                            &mut modified,
+                            request,
+                            part_path.into(),
+                            to.clone(),
+                            Some(range_end - range_start),
+                        )
+                        .await;
 
-                fetcher.send((to, FetchEvent::PartFetched(task)));
+                    fetcher.send((to, FetchEvent::PartFetched(partn as u64)));
 
-                result
-            }
-        }));
+                    result
+                }
+            })
+            // Ensure that only this many connections are happenning concurrently at a
+            // time
+            .buffered(concurrent as usize)
+            // This type exploded the stack, and therefore needs to be boxed
+            .boxed_local();
 
         systems::concatenator(concatenated_file, parts).await?;
 

@@ -16,6 +16,7 @@ use async_std::{fs::File, task};
 use futures::{channel::mpsc, prelude::*};
 use std::{
     io,
+    num::NonZeroU16,
     os::unix::io::{AsRawFd, FromRawFd},
     path::Path,
     sync::Arc,
@@ -59,11 +60,7 @@ async fn fetcher_stream<
 ) {
     let fetcher = Fetcher::new(Client::new())
         // Fetch each file in parts, using up to 4 concurrent connections per file
-        .connections_per_file(4)
-        // Define that a part must be at least this size
-        .min_part_size(1 * 1024)
-        // Define that a part must be no larger than this size
-        .max_part_size(4 * 1024)
+        .connections_per_file(NonZeroU16::new(4))
         // Pass in the event sender which events will be sent to
         .events(event_sender)
         // Configure a timeout to bail when a connection stalls for too long
