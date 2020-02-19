@@ -25,17 +25,12 @@ filetime = "0.2"
 futures = "0.3"
 hex = "0.4"
 http = "0.1"
+http-client =  { version = "1", features = [ "native_client" ] }
 log = "0.4"
 md-5 = "0.8"
 numtoa = "0.2"
 remem = "0.1"
-serde = { version = "1", features = [ "derive" ]}
+serde = { version = "1", features = [ "derive" ] }
 sha2 = "0.8"
+surf = { git = "https://github.com/http-rs/surf" }
 thiserror = "1"
-
-# surf = "1"
-# surf = { git = "https://github.com/http-rs/surf" }
-# http-client = "1"
-
-surf = { git = "https://github.com/mmstick/surf" }
-http-client = { git = "https://github.com/mmstick/http-client" }

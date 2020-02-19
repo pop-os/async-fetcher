@@ -16,10 +16,10 @@ bytes = "0.5"
 enclose = "1"
 fomat-macros = "0.3"
 futures = "0.3"
-futures_codec = "0.3"
-http-client = { git = "https://github.com/mmstick/http-client" }
-pbr = { git = "https://github.com/a8m/pb" }
+futures_codec = "0.4"
+http-client =  { version = "1", features = [ "native_client" ]}
+pbr = "1"
 ron = "0.5"
 serde = { version = "1", features = [ "derive" ]}
-surf = { git = "https://github.com/mmstick/surf" }
+surf = { git = "https://github.com/http-rs/surf" }
 thiserror = "1"
