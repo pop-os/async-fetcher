@@ -32,5 +32,5 @@ numtoa = "0.2"
 remem = "0.1"
 serde = { version = "1", features = [ "derive" ] }
 sha2 = "0.8"
-surf = { git = "https://github.com/http-rs/surf" }
+surf = { version = " = 2.0.0-alpha.0" }
 thiserror = "1"
