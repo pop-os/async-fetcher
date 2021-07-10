@@ -14,23 +14,22 @@ edition = "2018"
 members = [ "fetcher" ]
 
 [dependencies]
-async-std = "1"
-async-stream = "0.2"
-chrono = "0.4"
-derive_more = "0.99"
-derive_setters = "0.1"
-derive-new = "0.5"
-digest = "0.8"
-filetime = "0.2"
-futures = "0.3"
-hex = "0.4"
-http = "0.1"
-http-client =  { version = "1", features = [ "native_client" ] }
-log = "0.4"
-md-5 = "0.8"
-numtoa = "0.2"
-remem = "0.1"
-serde = { version = "1", features = [ "derive" ] }
-sha2 = "0.8"
-surf = { version = " = 2.0.0-alpha.0" }
-thiserror = "1"
+async-std = "1.9.0"
+async-stream = "0.3.2"
+chrono = "0.4.19"
+derive_more = "0.99.16"
+derive_setters = "0.1.5"
+derive-new = "0.5.9"
+digest = "0.9.0"
+filetime = "0.2.14"
+futures = "0.3.15"
+hex = "0.4.3"
+http-client =  { version = "6.4.1", features = [ "native_client" ] }
+log = "0.4.14"
+md-5 = "0.9.1"
+numtoa = "0.2.4"
+remem = "0.1.0"
+serde = { version = "1.0.126", features = [ "derive" ] }
+sha2 = "0.9.5"
+surf = "2.2.0"
+thiserror = "1.0.26"

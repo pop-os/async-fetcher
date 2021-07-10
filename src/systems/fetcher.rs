@@ -3,15 +3,14 @@ use crate::{Error, FetchEvent, Fetcher, Source};
 use async_std::fs;
 use futures::prelude::*;
 use std::{path::Path, sync::Arc};
-use surf::middleware::HttpClient;
 
 #[derive(new, Setters)]
-pub struct FetcherSystem<C: HttpClient> {
+pub struct FetcherSystem {
     #[setters(skip)]
-    client: Arc<Fetcher<C>>,
+    client: Arc<Fetcher>,
 }
 
-impl<C: HttpClient> FetcherSystem<C> {
+impl FetcherSystem {
     pub fn build<I, T>(
         self,
         inputs: I,

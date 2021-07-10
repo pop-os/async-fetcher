@@ -2,9 +2,8 @@ use crate::checksum::{Checksum, SumStrBuf};
 
 use async_fetcher::Source;
 use async_std::fs::File;
-use bytes::BytesMut;
 use futures::prelude::*;
-use futures_codec::{Decoder, FramedRead};
+use futures_codec::{BytesMut, Decoder, FramedRead};
 use serde::Deserialize;
 use std::{convert::TryFrom, io, path::PathBuf};
 
