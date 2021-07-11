@@ -66,7 +66,7 @@ async fn fetcher_stream<
         // Configure a timeout to bail when a connection stalls for too long
         .timeout(Duration::from_secs(15))
         // Wrap it in an Arc
-        .into_arc();
+        .into();
 
     let mut fetcher = FetcherSystem::new(fetcher)
         // Create a stream from the input sources
