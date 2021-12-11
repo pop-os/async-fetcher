@@ -27,7 +27,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_std::{
@@ -35,13 +35,13 @@ use async_std::{
     prelude::*,
 };
 
-use chrono::{DateTime, Utc};
 use filetime::FileTime;
 use futures::{
     channel::mpsc,
     stream::{self, StreamExt},
 };
 use http_client::native::NativeClient;
+use httpdate::HttpDate;
 use numtoa::NumToA;
 use surf::{Client, Request, Response, StatusCode};
 
@@ -222,14 +222,13 @@ impl Fetcher {
                                 .expect("time went backwards");
 
                             if metadata.len() == content_length
-                                && ts.as_secs() == last_modified.timestamp() as u64
+                                && ts.as_secs() == date_as_timestamp(last_modified)
                             {
                                 self.send((to, FetchEvent::AlreadyFetched));
                                 return Ok(());
                             }
 
-                            if_modified_since =
-                                Some(DateTime::<Utc>::from(modified).to_rfc2822());
+                            if_modified_since = Some(HttpDate::from(modified));
                             length = Some(content_length);
                         }
                         Err(why) => {
@@ -266,7 +265,10 @@ impl Fetcher {
 
         let mut request = self.client.get(&*uris[0]).header("Expect", "").build();
         if let Some(modified_since) = if_modified_since {
-            request.set_header("if-modified-since", modified_since);
+            request.set_header(
+                "if-modified-since",
+                httpdate::fmt_http_date(modified_since.into()),
+            );
         }
 
         let path = match self
@@ -283,7 +285,8 @@ impl Fetcher {
         };
 
         if let Some(modified) = modified {
-            let filetime = FileTime::from_unix_time(modified.timestamp(), 0);
+            let filetime =
+                FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
             filetime::set_file_times(&path, filetime, filetime)
                 .map_err(move |why| Error::FileTime(path, why))?;
         }
@@ -293,7 +296,7 @@ impl Fetcher {
 
     async fn get(
         &self,
-        modified: &mut Option<DateTime<Utc>>,
+        modified: &mut Option<HttpDate>,
         request: Request,
         to: Arc<Path>,
         dest: Arc<Path>,
@@ -355,7 +358,7 @@ impl Fetcher {
         concurrent: u16,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
-        mut modified: Option<DateTime<Utc>>,
+        mut modified: Option<HttpDate>,
     ) -> Result<(), Error> {
         let parent = to.parent().ok_or(Error::Parentless)?;
         let filename = to.file_name().ok_or(Error::Nameless)?;
@@ -367,7 +370,7 @@ impl Fetcher {
             &mut File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
 
         let max_part_size =
-            unsafe { NonZeroU64::new_unchecked(u64::from(self.max_part_size.get())) };
+            NonZeroU64::new(self.max_part_size.get() as u64).expect("max part size is 0");
 
         let to_ = to.clone();
         let parts = stream::iter(range::generate(length, max_part_size).enumerate())
@@ -421,7 +424,8 @@ impl Fetcher {
         systems::concatenator(concatenated_file, parts).await?;
 
         if let Some(modified) = modified {
-            let filetime = FileTime::from_unix_time(modified.timestamp(), 0);
+            let filetime =
+                FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
             filetime::set_file_times(&to, filetime, filetime)
                 .map_err(|why| Error::FileTime(to, why))?;
         }
@@ -481,7 +485,7 @@ fn validate(response: Response) -> Result<Response, Error> {
 
 trait ResponseExt {
     fn content_length(&self) -> Option<u64>;
-    fn last_modified(&self) -> Option<DateTime<Utc>>;
+    fn last_modified(&self) -> Option<HttpDate>;
 }
 
 impl ResponseExt for Response {
@@ -490,10 +494,12 @@ impl ResponseExt for Response {
         header.as_str().parse::<u64>().ok()
     }
 
-    fn last_modified(&self) -> Option<DateTime<Utc>> {
+    fn last_modified(&self) -> Option<HttpDate> {
         let header = self.header("last-modified")?.get(0)?;
-        DateTime::parse_from_rfc2822(header.as_str())
-            .ok()
-            .map(|tz| tz.with_timezone(&Utc))
+        httpdate::parse_http_date(header.as_str()).ok().map(HttpDate::from)
     }
+}
+
+fn date_as_timestamp(date: HttpDate) -> u64 {
+    SystemTime::from(date).duration_since(UNIX_EPOCH).expect("time backwards").as_secs()
 }
