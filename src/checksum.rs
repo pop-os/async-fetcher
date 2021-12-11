@@ -1,4 +1,4 @@
-use digest::{generic_array::GenericArray, Digest};
+use digest::{generic_array::GenericArray, Digest, OutputSizeUser};
 use futures::prelude::*;
 use hex::FromHex;
 use md5::Md5;
@@ -8,8 +8,8 @@ use std::{convert::TryFrom, io};
 
 #[derive(Debug)]
 pub enum Checksum {
-    Md5(GenericArray<u8, <Md5 as Digest>::OutputSize>),
-    Sha256(GenericArray<u8, <Sha256 as Digest>::OutputSize>),
+    Md5(GenericArray<u8, <Md5 as OutputSizeUser>::OutputSize>),
+    Sha256(GenericArray<u8, <Sha256 as OutputSizeUser>::OutputSize>),
 }
 
 #[derive(Debug, Error)]
