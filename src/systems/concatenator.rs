@@ -3,11 +3,8 @@
 
 use crate::Error;
 
-use async_std::{
-    fs::{self, File},
-    io::copy,
-    prelude::*,
-};
+use async_fs::{self as fs, File};
+use futures::{io::copy, Stream, StreamExt};
 use std::{path::Path, sync::Arc};
 
 pub async fn concatenator<P>(dest: &mut File, mut parts: P) -> Result<(), Error>

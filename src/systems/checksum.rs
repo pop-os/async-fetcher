@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::checksum::{Checksum, ChecksumError};
-use async_std::fs::{self, File};
+use async_fs::{self as fs, File};
 use futures::prelude::*;
 use remem::Pool;
 use std::{io, path::Path, sync::Arc};

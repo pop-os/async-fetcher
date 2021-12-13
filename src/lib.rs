@@ -20,6 +20,7 @@ pub use self::systems::*;
 
 use std::{
     fmt::Debug,
+    future::Future,
     io,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::Path,
@@ -30,15 +31,12 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use async_std::{
-    fs::{self, File},
-    prelude::*,
-};
-
+use async_fs::{self as fs, File};
 use filetime::FileTime;
 use futures::{
     channel::mpsc,
     stream::{self, StreamExt},
+    AsyncReadExt, AsyncWriteExt,
 };
 use http_client::native::NativeClient;
 use httpdate::HttpDate;
@@ -309,9 +307,10 @@ impl Fetcher {
         }
 
         let response = &mut validate(if let Some(duration) = self.timeout {
-            timed(duration, async {
-                self.client.send(request).await.map_err(Error::from)
-            })
+            timed(
+                duration,
+                Box::pin(async { self.client.send(request).await.map_err(Error::from) }),
+            )
             .await??
         } else {
             self.client.send(request).await?
@@ -336,7 +335,7 @@ impl Fetcher {
             let reader = async { response.read(buffer).await.map_err(Error::Write) };
 
             read = match self.timeout {
-                Some(duration) => timed(duration, reader).await??,
+                Some(duration) => timed(duration, Box::pin(reader)).await??,
                 None => reader.await?,
             };
 
@@ -468,9 +467,19 @@ async fn supports_range(client: &Client, uri: &str, length: u64) -> Result<bool,
 
 async fn timed<F, T>(duration: Duration, future: F) -> Result<T, Error>
 where
-    F: Future<Output = T>,
+    F: Future<Output = T> + Unpin,
 {
-    async_std::future::timeout(duration, future).await.map_err(|_| Error::TimedOut)
+    let timeout = async move {
+        async_io::Timer::after(duration).await;
+        Err(Error::TimedOut)
+    };
+
+    let result = async move { Ok(future.await) };
+
+    futures::pin_mut!(timeout);
+    futures::pin_mut!(result);
+
+    futures::future::select(timeout, result).await.factor_first().0
 }
 
 fn validate(response: Response) -> Result<Response, Error> {

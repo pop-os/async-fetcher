@@ -14,7 +14,6 @@ edition = "2018"
 members = [ "fetcher" ]
 
 [dependencies]
-async-std = "1.10.0"
 async-stream = "0.3.2"
 derive_more = "0.99.17"
 derive_setters = "0.1.5"
@@ -33,3 +32,5 @@ serde = { version = "1.0.131", features = [ "derive" ] }
 sha2 = "0.10.0"
 surf = "2.3.2"
 thiserror = "1.0.30"
+async-fs = "1.5.0"
+async-io = "1.6.0"

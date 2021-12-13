@@ -3,7 +3,7 @@
 
 use crate::{Error, FetchEvent, Fetcher, Source};
 
-use async_std::fs;
+use async_fs as fs;
 use futures::prelude::*;
 use std::{path::Path, sync::Arc};
 
