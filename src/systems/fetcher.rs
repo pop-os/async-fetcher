@@ -25,19 +25,17 @@ impl FetcherSystem {
             let fetcher = self.client.clone();
 
             async move {
-                let Source { dest, urls, part, .. } = source;
+                let Source {
+                    dest, urls, part, ..
+                } = source;
 
                 fetcher.send((dest.clone(), FetchEvent::Fetching));
 
                 let result = match part {
-                    Some(part) => {
-                        match fetcher.clone().request(urls, part.clone()).await {
-                            Ok(()) => {
-                                fs::rename(&*part, &*dest).await.map_err(Error::Rename)
-                            }
-                            Err(why) => Err(why),
-                        }
-                    }
+                    Some(part) => match fetcher.clone().request(urls, part.clone()).await {
+                        Ok(()) => fs::rename(&*part, &*dest).await.map_err(Error::Rename),
+                        Err(why) => Err(why),
+                    },
                     None => fetcher.clone().request(urls, dest.clone()).await,
                 };
 

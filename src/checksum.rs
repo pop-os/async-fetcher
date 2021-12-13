@@ -48,12 +48,12 @@ impl<'a> TryFrom<SumStr<'a>> for Checksum {
 
     fn try_from(input: SumStr) -> Result<Self, Self::Error> {
         match input {
-            SumStr::Md5(sum) => {
-                <[u8; 16]>::from_hex(sum).map(GenericArray::from).map(Checksum::Md5)
-            }
-            SumStr::Sha256(sum) => {
-                <[u8; 32]>::from_hex(sum).map(GenericArray::from).map(Checksum::Sha256)
-            }
+            SumStr::Md5(sum) => <[u8; 16]>::from_hex(sum)
+                .map(GenericArray::from)
+                .map(Checksum::Md5),
+            SumStr::Sha256(sum) => <[u8; 32]>::from_hex(sum)
+                .map(GenericArray::from)
+                .map(Checksum::Sha256),
         }
     }
 }

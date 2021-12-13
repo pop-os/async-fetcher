@@ -86,9 +86,7 @@ pub async fn run(
         while let Some((dest, result)) = fetch_rx.next().await {
             let event = match result {
                 Ok(false) => None,
-                Ok(true) => {
-                    Some(Output(fomat!((dest.display())), OutputEvent::Validating))
-                }
+                Ok(true) => Some(Output(fomat!((dest.display())), OutputEvent::Validating)),
                 Err(why) => {
                     epintln!((dest.display()) " failed to validate: " [why]);
 

@@ -13,7 +13,10 @@ use std::{convert::TryFrom, io, path::PathBuf};
 #[derive(Debug, Error)]
 pub enum InputError {
     #[error("decoder error")]
-    Decoder { input: Box<str>, source: ron::de::Error },
+    Decoder {
+        input: Box<str>,
+        source: ron::de::Error,
+    },
     #[error("read error")]
     Read(#[from] io::Error),
 }
@@ -58,12 +61,10 @@ struct Input {
     urls: Vec<Box<str>>,
     dest: String,
     part: Option<String>,
-    sum:  Option<SumStrBuf>,
+    sum: Option<SumStrBuf>,
 }
 
-pub fn stream(
-    input: File,
-) -> impl Stream<Item = (Source, Option<Checksum>)> + Send + Unpin {
+pub fn stream(input: File) -> impl Stream<Item = (Source, Option<Checksum>)> + Send + Unpin {
     FramedRead::new(input, Inputs::default())
         .filter_map(|result| async move {
             match result {

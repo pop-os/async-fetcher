@@ -53,9 +53,7 @@ async fn execute(
 }
 
 /// The fetcher, which will be used to create futures for fetching files.
-async fn fetcher_stream<
-    S: Unpin + Send + Stream<Item = (Source, Option<Checksum>)> + 'static,
->(
+async fn fetcher_stream<S: Unpin + Send + Stream<Item = (Source, Option<Checksum>)> + 'static>(
     event_sender: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
     mut result_sender: mpsc::Sender<(Arc<Path>, Result<bool, FetchError>)>,
     mut checksum_sender: mpsc::Sender<(Arc<Path>, Checksum)>,

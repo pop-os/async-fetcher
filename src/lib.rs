@@ -80,7 +80,9 @@ pub enum Error {
 }
 
 impl From<surf::Error> for Error {
-    fn from(e: surf::Error) -> Self { Self::Client(e) }
+    fn from(e: surf::Error) -> Self {
+        Self::Client(e)
+    }
 }
 
 /// Information about a source being fetched.
@@ -102,7 +104,11 @@ pub struct Source {
 
 impl Source {
     pub fn new(urls: impl Into<Arc<[Box<str>]>>, dest: impl Into<Arc<Path>>) -> Self {
-        Self { urls: urls.into(), dest: dest.into(), part: None }
+        Self {
+            urls: urls.into(),
+            dest: dest.into(),
+            part: None,
+        }
     }
 }
 
@@ -166,7 +172,9 @@ pub struct Fetcher {
 }
 
 impl Default for Fetcher {
-    fn default() -> Self { Self::new(Client::with_http_client(NativeClient::default())) }
+    fn default() -> Self {
+        Self::new(Client::with_http_client(NativeClient::default()))
+    }
 }
 
 impl Fetcher {
@@ -209,9 +217,7 @@ impl Fetcher {
                 let content_length = response.content_length();
                 modified = response.last_modified();
 
-                if let (Some(content_length), Some(last_modified)) =
-                    (content_length, modified)
-                {
+                if let (Some(content_length), Some(last_modified)) = (content_length, modified) {
                     match fs::metadata(to.as_ref()).await {
                         Ok(metadata) => {
                             let modified = metadata.modified().map_err(Error::Write)?;
@@ -277,14 +283,14 @@ impl Fetcher {
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NotImplemented)) => {
                 let request = self.client.get(&*uris[0]).header("Expect", "").build();
-                self.get(&mut modified, request, to.clone(), to, None).await?
+                self.get(&mut modified, request, to.clone(), to, None)
+                    .await?
             }
             Err(why) => return Err(why),
         };
 
         if let Some(modified) = modified {
-            let filetime =
-                FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
+            let filetime = FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
             filetime::set_file_times(&path, filetime, filetime)
                 .map_err(move |why| Error::FileTime(path, why))?;
         }
@@ -342,7 +348,9 @@ impl Fetcher {
             if read != 0 {
                 self.send((dest.clone(), FetchEvent::Progress(read)));
 
-                file.write_all(&buffer[..read]).await.map_err(Error::Write)?;
+                file.write_all(&buffer[..read])
+                    .await
+                    .map_err(Error::Write)?;
             } else {
                 break;
             }
@@ -365,8 +373,7 @@ impl Fetcher {
         let mut buf = [0u8; 20];
 
         // The destination which parts will be concatenated to.
-        let concatenated_file =
-            &mut File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
+        let concatenated_file = &mut File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
 
         let max_part_size =
             NonZeroU64::new(self.max_part_size.get() as u64).expect("max part size is 0");
@@ -379,8 +386,7 @@ impl Fetcher {
 
                 let part_path = {
                     let mut new_filename = filename.to_os_string();
-                    new_filename
-                        .push(&[".part", partn.numtoa_str(10, &mut buf)].concat());
+                    new_filename.push(&[".part", partn.numtoa_str(10, &mut buf)].concat());
                     parent.join(new_filename)
                 };
 
@@ -423,8 +429,7 @@ impl Fetcher {
         systems::concatenator(concatenated_file, parts).await?;
 
         if let Some(modified) = modified {
-            let filetime =
-                FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
+            let filetime = FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
             filetime::set_file_times(&to, filetime, filetime)
                 .map_err(|why| Error::FileTime(to, why))?;
         }
@@ -433,7 +438,9 @@ impl Fetcher {
     }
 
     fn cancelled(&self) -> bool {
-        self.cancel.as_ref().map_or(false, |cancel| cancel.load(Ordering::SeqCst))
+        self.cancel
+            .as_ref()
+            .map_or(false, |cancel| cancel.load(Ordering::SeqCst))
     }
 
     fn send(&self, event: (Arc<Path>, FetchEvent)) {
@@ -479,7 +486,10 @@ where
     futures::pin_mut!(timeout);
     futures::pin_mut!(result);
 
-    futures::future::select(timeout, result).await.factor_first().0
+    futures::future::select(timeout, result)
+        .await
+        .factor_first()
+        .0
 }
 
 fn validate(response: Response) -> Result<Response, Error> {
@@ -505,10 +515,15 @@ impl ResponseExt for Response {
 
     fn last_modified(&self) -> Option<HttpDate> {
         let header = self.header("last-modified")?.get(0)?;
-        httpdate::parse_http_date(header.as_str()).ok().map(HttpDate::from)
+        httpdate::parse_http_date(header.as_str())
+            .ok()
+            .map(HttpDate::from)
     }
 }
 
 fn date_as_timestamp(date: HttpDate) -> u64 {
-    SystemTime::from(date).duration_since(UNIX_EPOCH).expect("time backwards").as_secs()
+    SystemTime::from(date)
+        .duration_since(UNIX_EPOCH)
+        .expect("time backwards")
+        .as_secs()
 }

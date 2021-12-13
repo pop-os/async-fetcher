@@ -22,8 +22,7 @@ impl ChecksumSystem {
     pub fn build<I: Stream<Item = (Arc<Path>, Checksum)> + Unpin>(
         self,
         inputs: I,
-    ) -> impl Stream<Item = impl Future<Output = (Arc<Path>, Result<(), ChecksummerError>)>>
-    {
+    ) -> impl Stream<Item = impl Future<Output = (Arc<Path>, Result<(), ChecksummerError>)>> {
         let buffer_pool = Pool::new(|| Box::new([0u8; 8 * 1024]));
 
         inputs.map(move |(dest, checksum)| {
