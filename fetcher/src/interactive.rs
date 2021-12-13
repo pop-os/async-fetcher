@@ -4,8 +4,7 @@
 use crate::execute;
 
 use async_fetcher::{ChecksumSystem, FetchEvent};
-use async_std::task;
-use futures::{channel::mpsc, executor, prelude::*};
+use futures::{channel::mpsc, prelude::*};
 use pbr::{MultiBar, Pipe, ProgressBar, Units};
 use std::{
     collections::HashMap,
@@ -14,11 +13,10 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread,
     time::Duration,
 };
 
-pub fn run(
+pub async fn run(
     etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
     mut erx: mpsc::UnboundedReceiver<(Arc<Path>, FetchEvent)>,
 ) {
@@ -90,7 +88,7 @@ pub fn run(
         let mut stream = ChecksumSystem::new()
             .build(sum_rx)
             // Distribute each checksum future across a thread pool.
-            .map(|future| task::spawn_blocking(|| executor::block_on(future)))
+            .map(|future| blocking::unblock(|| async_io::block_on(future)))
             // Limiting up to 32 concurrent tasks at a time.
             .buffer_unordered(32);
 
@@ -102,23 +100,23 @@ pub fn run(
         }
     };
 
-    let handle = thread::spawn(|| {
-        task::block_on(async move {
-            join!(
-                fetcher,
-                fetch_results,
-                sum_results,
-                execute(etx, fetch_tx, sum_tx).boxed_local(),
-            )
-        })
-    });
+    let events = async move {
+        join!(
+            fetcher,
+            fetch_results,
+            sum_results,
+            execute(etx, fetch_tx, sum_tx).boxed_local(),
+        )
+    };
 
-    while !complete.load(Ordering::SeqCst) {
-        let _ = progress.listen();
-        thread::sleep(Duration::from_millis(1000));
-    }
+    let progress_ticker = async {
+        while !complete.load(Ordering::SeqCst) {
+            let _ = progress.listen();
+            async_io::Timer::after(Duration::from_millis(1000)).await;
+        }
+    };
 
-    handle.join();
+    join!(events, progress_ticker);
 
     let _ = progress.listen();
 }

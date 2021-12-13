@@ -15,7 +15,7 @@ mod machine;
 use async_fetcher::checksum::Checksum;
 
 use async_fetcher::{Error as FetchError, *};
-use async_std::{fs::File, task};
+use async_fs::File;
 use futures::{channel::mpsc, prelude::*};
 use std::{
     io,
@@ -32,11 +32,15 @@ fn main() {
 
     let (tx, rx) = mpsc::unbounded::<(Arc<Path>, FetchEvent)>();
 
-    if atty::is(atty::Stream::Stdout) {
-        interactive::run(tx, rx)
-    } else {
-        task::block_on(machine::run(tx, rx))
-    }
+    async_io::block_on(async {
+        if atty::is(atty::Stream::Stdout) {
+            interactive::run(tx, rx).await
+        } else {
+            machine::run(tx, rx).await
+        }
+    })
+
+
 }
 
 async fn execute(

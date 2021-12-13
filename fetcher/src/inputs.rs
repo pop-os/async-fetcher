@@ -4,7 +4,7 @@
 use crate::checksum::{Checksum, SumStrBuf};
 
 use async_fetcher::Source;
-use async_std::fs::File;
+use async_fs::File;
 use futures::prelude::*;
 use futures_codec::{BytesMut, Decoder, FramedRead};
 use serde::Deserialize;

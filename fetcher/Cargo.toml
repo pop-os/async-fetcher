@@ -9,14 +9,17 @@ license = "MPL-2.0"
 
 [dependencies]
 async-fetcher = { path = "../" }
-async-std = { version = "1.9.0", features = ["unstable"] }
+async-fs = "1.5.0"
+async-io = "1.6.0"
 atty = "0.2.14"
 better-panic = "0.2.0"
+blocking = "1.1.0"
 fomat-macros = "0.3.1"
-futures = "0.3.15"
+futures = "0.3.18"
 futures_codec = "0.4.1"
 pbr = "1.0.4"
-ron = "0.6.4"
-serde = { version = "1.0.126", features = [ "derive" ] }
-surf = "2.2.0"
-thiserror = "1.0.26"
+ron = "0.7.0"
+serde = { version = "1.0.131", features = [ "derive" ] }
+surf = "2.3.2"
+thiserror = "1.0.30"
+tokio = "1.14.0"

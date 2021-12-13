@@ -4,8 +4,7 @@
 use crate::execute;
 
 use async_fetcher::{ChecksumSystem, FetchEvent};
-use async_std::task;
-use futures::{channel::mpsc, executor, prelude::*};
+use futures::{channel::mpsc, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -108,7 +107,7 @@ pub async fn run(
         let mut stream = ChecksumSystem::new()
             .build(sum_rx)
             // Distribute each checksum future across a thread pool.
-            .map(|future| task::spawn_blocking(|| executor::block_on(future)))
+            .map(|future| blocking::unblock(|| async_io::block_on(future)))
             // Limiting up to 32 concurrent tasks at a time.
             .buffer_unordered(32);
 
