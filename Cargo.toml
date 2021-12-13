@@ -2,7 +2,7 @@
 name = "async-fetcher"
 version = "0.3.0-alpha.3"
 repository = "https://github.com/pop-os/async-fetcher"
-authors = ["Michael Aaron Murphy <mmstickman@gmail.com>"]
+authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
 description = "Asynchronous file fetcher, with optional fetching based on modified times and checksums"
 keywords = ["async", "file", "fetcher", "download", "parallel"]
 categories = ["asynchronous", "network-programming", "web-programming::http-client"]
