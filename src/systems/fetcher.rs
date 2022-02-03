@@ -1,11 +1,11 @@
-// Copyright 2021 System76 <info@system76.com>
+// Copyright 2021-2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::{Error, FetchEvent, Fetcher, Source};
 
-use async_fs as fs;
 use futures::prelude::*;
 use std::{path::Path, sync::Arc};
+use tokio::fs;
 
 #[derive(new, Setters)]
 pub struct FetcherSystem {

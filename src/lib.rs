@@ -1,4 +1,4 @@
-// Copyright 2021 System76 <info@system76.com>
+// Copyright 2021-2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
 #![recursion_limit = "1024"]
@@ -18,6 +18,17 @@ mod systems;
 
 pub use self::systems::*;
 
+use filetime::FileTime;
+use futures::{
+    channel::mpsc,
+    stream::{self, StreamExt},
+    AsyncReadExt,
+};
+use http::StatusCode;
+use httpdate::HttpDate;
+use isahc::config::Configurable;
+use isahc::{AsyncBody, HttpClient as Client, Request, Response};
+use numtoa::NumToA;
 use std::{
     fmt::Debug,
     future::Future,
@@ -30,19 +41,8 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-use async_fs::{self as fs, File};
-use filetime::FileTime;
-use futures::{
-    channel::mpsc,
-    stream::{self, StreamExt},
-    AsyncReadExt, AsyncWriteExt,
-};
-use http::StatusCode;
-use httpdate::HttpDate;
-use isahc::config::Configurable;
-use isahc::{AsyncBody, HttpClient as Client, Request, Response};
-use numtoa::NumToA;
+use tokio::fs::{self, File};
+use tokio::io::AsyncWriteExt;
 
 pub type EventSender = mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>;
 pub type Output<T> = (Arc<Path>, Result<T, Error>);
@@ -487,7 +487,7 @@ where
     F: Future<Output = T> + Unpin,
 {
     let timeout = async move {
-        async_io::Timer::after(duration).await;
+        tokio::time::sleep(duration).await;
         Err(Error::TimedOut)
     };
 

@@ -14,7 +14,6 @@ edition = "2018"
 members = [ "fetcher" ]
 
 [dependencies]
-async-stream = "0.3.2"
 derive_more = "0.99.17"
 derive_setters = "0.1.5"
 derive-new = "0.5.9"
@@ -30,7 +29,9 @@ remem = "0.1.0"
 serde = { version = "1.0.136", features = [ "derive" ] }
 sha2 = "0.10.1"
 thiserror = "1.0.30"
-async-fs = "1.5.0"
-async-io = "1.6.0"
 isahc = "1.6.0"
 http = "0.2.6"
+
+[dependencies.tokio]
+version = "1.16.1"
+features = ["fs", "io-util", "time"]

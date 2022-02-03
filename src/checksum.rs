@@ -1,13 +1,13 @@
-// Copyright 2021 System76 <info@system76.com>
+// Copyright 2021-2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
 use digest::{generic_array::GenericArray, Digest, OutputSizeUser};
-use futures::prelude::*;
 use hex::FromHex;
 use md5::Md5;
 use serde::Deserialize;
 use sha2::Sha256;
 use std::{convert::TryFrom, io};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Debug)]
 pub enum Checksum {

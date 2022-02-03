@@ -1,11 +1,11 @@
-// Copyright 2021 System76 <info@system76.com>
+// Copyright 2021-2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::checksum::{Checksum, ChecksumError};
-use async_fs::{self as fs, File};
 use futures::prelude::*;
 use remem::Pool;
 use std::{io, path::Path, sync::Arc};
+use tokio::fs::{self, File};
 
 #[derive(Debug, Error)]
 pub enum ChecksummerError {
