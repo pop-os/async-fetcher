@@ -25,7 +25,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use surf::Client;
 
 fn main() {
     better_panic::install();
@@ -39,8 +38,6 @@ fn main() {
             machine::run(tx, rx).await
         }
     })
-
-
 }
 
 async fn execute(
@@ -63,7 +60,7 @@ async fn fetcher_stream<S: Unpin + Send + Stream<Item = (Source, Option<Checksum
     mut checksum_sender: mpsc::Sender<(Arc<Path>, Checksum)>,
     sources: S,
 ) {
-    let fetcher = Fetcher::new(Client::new())
+    let fetcher = Fetcher::default()
         // Fetch each file in parts, using up to 4 concurrent connections per file
         .connections_per_file(NonZeroU16::new(4))
         // Pass in the event sender which events will be sent to

@@ -38,10 +38,11 @@ use futures::{
     stream::{self, StreamExt},
     AsyncReadExt, AsyncWriteExt,
 };
-use http_client::native::NativeClient;
+use http::StatusCode;
 use httpdate::HttpDate;
+use isahc::config::Configurable;
+use isahc::{AsyncBody, HttpClient as Client, Request, Response};
 use numtoa::NumToA;
-use surf::{Client, Request, Response, StatusCode};
 
 pub type EventSender = mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>;
 pub type Output<T> = (Arc<Path>, Result<T, Error>);
@@ -52,7 +53,7 @@ pub enum Error {
     #[error("task was cancelled")]
     Cancelled,
     #[error("http client error")]
-    Client(surf::Error),
+    Client(isahc::Error),
     #[error("unable to concatenate fetched parts")]
     Concatenate(#[source] io::Error),
     #[error("unable to create file")]
@@ -79,8 +80,8 @@ pub enum Error {
     Status(StatusCode),
 }
 
-impl From<surf::Error> for Error {
-    fn from(e: surf::Error) -> Self {
+impl From<isahc::Error> for Error {
+    fn from(e: isahc::Error) -> Self {
         Self::Client(e)
     }
 }
@@ -173,7 +174,12 @@ pub struct Fetcher {
 
 impl Default for Fetcher {
     fn default() -> Self {
-        Self::new(Client::with_http_client(NativeClient::default()))
+        Self::new(
+            Client::builder()
+                .low_speed_timeout(1, std::time::Duration::from_secs(15))
+                .build()
+                .expect("failed to build HTTP client"),
+        )
     }
 }
 
@@ -267,22 +273,23 @@ impl Fetcher {
             }
         }
 
-        let mut request = self.client.get(&*uris[0]).header("Expect", "").build();
+        let mut request = Request::get(&*uris[0]).header("Expect", "");
+
         if let Some(modified_since) = if_modified_since {
-            request.set_header(
+            request = request.header(
                 "if-modified-since",
                 httpdate::fmt_http_date(modified_since.into()),
             );
         }
 
         let path = match self
-            .get(&mut modified, request.clone(), to.clone(), to.clone(), None)
+            .get(&mut modified, request, to.clone(), to.clone(), None)
             .await
         {
             Ok(path) => path,
             // Server does not support if-modified-since
-            Err(Error::Status(StatusCode::NotImplemented)) => {
-                let request = self.client.get(&*uris[0]).header("Expect", "").build();
+            Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
+                let request = Request::get(&*uris[0]).header("Expect", "");
                 self.get(&mut modified, request, to.clone(), to, None)
                     .await?
             }
@@ -301,11 +308,13 @@ impl Fetcher {
     async fn get(
         &self,
         modified: &mut Option<HttpDate>,
-        request: Request,
+        request: http::request::Builder,
         to: Arc<Path>,
         dest: Arc<Path>,
         length: Option<u64>,
     ) -> Result<Arc<Path>, Error> {
+        let request = request.body(()).expect("failed to build request");
+
         let mut file = File::create(to.as_ref()).await.map_err(Error::FileCreate)?;
 
         if let Some(length) = length {
@@ -315,18 +324,18 @@ impl Fetcher {
         let response = &mut validate(if let Some(duration) = self.timeout {
             timed(
                 duration,
-                Box::pin(async { self.client.send(request).await.map_err(Error::from) }),
+                Box::pin(async { self.client.send_async(request).await.map_err(Error::from) }),
             )
             .await??
         } else {
-            self.client.send(request).await?
+            self.client.send_async(request).await?
         })?;
 
         if modified.is_none() {
             *modified = response.last_modified();
         }
 
-        if response.status() == StatusCode::NotModified {
+        if response.status() == StatusCode::NOT_MODIFIED {
             return Ok(to);
         }
 
@@ -338,7 +347,7 @@ impl Fetcher {
                 return Err(Error::Cancelled);
             }
 
-            let reader = async { response.read(buffer).await.map_err(Error::Write) };
+            let reader = async { response.body_mut().read(buffer).await.map_err(Error::Write) };
 
             read = match self.timeout {
                 Some(duration) => timed(duration, Box::pin(reader)).await??,
@@ -398,12 +407,9 @@ impl Fetcher {
 
                     fetcher.send((to.clone(), FetchEvent::PartFetching(partn as u64)));
 
-                    let request = fetcher
-                        .client
-                        .get(&*uri)
+                    let request = Request::get(&*uri)
                         .header("range", range.as_str())
-                        .header("Expect", "")
-                        .build();
+                        .header("Expect", "");
 
                     let result = fetcher
                         .get(
@@ -450,22 +456,26 @@ impl Fetcher {
     }
 }
 
-async fn head(client: &Client, uri: &str) -> Result<Option<Response>, Error> {
-    match validate(client.head(uri).header("Expect", "").await?).map(Some) {
+async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBody>>, Error> {
+    let request = Request::head(uri).header("Expect", "").body(()).unwrap();
+
+    match validate(client.send_async(request).await?).map(Some) {
         result @ Ok(_) => result,
-        Err(Error::Status(StatusCode::NotImplemented)) => Ok(None),
+        Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
         Err(other) => Err(other),
     }
 }
 
 async fn supports_range(client: &Client, uri: &str, length: u64) -> Result<bool, Error> {
-    let response = client
-        .head(uri)
+    let request = Request::head(uri)
         .header("Expect", "")
         .header("range", range::to_string(0, length).as_str())
-        .await?;
+        .body(())
+        .unwrap();
 
-    if response.status() == StatusCode::PartialContent {
+    let response = client.send_async(request).await?;
+
+    if response.status() == StatusCode::PARTIAL_CONTENT {
         Ok(true)
     } else {
         validate(response).map(|_| false)
@@ -492,7 +502,7 @@ where
         .0
 }
 
-fn validate(response: Response) -> Result<Response, Error> {
+fn validate(response: Response<AsyncBody>) -> Result<Response<AsyncBody>, Error> {
     let status = response.status();
 
     if status.is_informational() || status.is_success() {
@@ -507,15 +517,15 @@ trait ResponseExt {
     fn last_modified(&self) -> Option<HttpDate>;
 }
 
-impl ResponseExt for Response {
+impl ResponseExt for Response<AsyncBody> {
     fn content_length(&self) -> Option<u64> {
-        let header = self.header("content-length")?.get(0)?;
-        header.as_str().parse::<u64>().ok()
+        let header = self.headers().get("content-length")?;
+        header.to_str().ok()?.parse::<u64>().ok()
     }
 
     fn last_modified(&self) -> Option<HttpDate> {
-        let header = self.header("last-modified")?.get(0)?;
-        httpdate::parse_http_date(header.as_str())
+        let header = self.headers().get("last-modified")?;
+        httpdate::parse_http_date(header.to_str().ok()?)
             .ok()
             .map(HttpDate::from)
     }
