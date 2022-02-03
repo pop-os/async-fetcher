@@ -15,26 +15,30 @@ pub enum ChecksummerError {
     Open(#[source] io::Error),
 }
 
-#[derive(new)]
-pub struct ChecksumSystem;
+/// Generates a stream of futures that validate checksums.
+///
+/// The caller can choose to distribute these futures across a thread pool.
+///
+/// ```
+/// let mut stream = checksum_stream(checksums).map(tokio::spawn).buffered(8);
+/// while let Some((path, result)) = stream.next().await {
+///     eprintln!("{:?} checksum result: {:?}", path, result);
+/// }
+/// ```
+pub fn checksum_stream<I: Stream<Item = (Arc<Path>, Checksum)> + Send + Unpin + 'static>(
+    inputs: I,
+) -> impl Stream<Item = impl Future<Output = (Arc<Path>, Result<(), ChecksummerError>)>> {
+    let buffer_pool = Pool::new(|| Box::new([0u8; 8 * 1024]));
 
-impl ChecksumSystem {
-    pub fn build<I: Stream<Item = (Arc<Path>, Checksum)> + Unpin>(
-        self,
-        inputs: I,
-    ) -> impl Stream<Item = impl Future<Output = (Arc<Path>, Result<(), ChecksummerError>)>> {
-        let buffer_pool = Pool::new(|| Box::new([0u8; 8 * 1024]));
+    inputs.map(move |(dest, checksum)| {
+        let pool = buffer_pool.clone();
 
-        inputs.map(move |(dest, checksum)| {
-            let pool = buffer_pool.clone();
-
-            async move {
-                let buf = &mut **pool.get();
-                let result = validate_checksum(buf, &dest, &checksum).await;
-                (dest, result)
-            }
-        })
-    }
+        async move {
+            let buf = &mut **pool.get();
+            let result = validate_checksum(buf, &dest, &checksum).await;
+            (dest, result)
+        }
+    })
 }
 
 /// Validates the checksum of a single file

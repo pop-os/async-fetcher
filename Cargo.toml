@@ -1,10 +1,10 @@
 [package]
 name = "async-fetcher"
-version = "0.3.0-alpha.3"
+version = "0.4.0"
 repository = "https://github.com/pop-os/async-fetcher"
 authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
-description = "Asynchronous file fetcher, with optional fetching based on modified times and checksums"
-keywords = ["async", "file", "fetcher", "download", "parallel"]
+description = "Asynchronous multi-connection multi-download resumable HTTP file fetching state machine"
+keywords = ["async", "file", "fetch", "download", "parallel"]
 categories = ["asynchronous", "network-programming", "web-programming::http-client"]
 license = "MPL-2.0"
 readme = "README.md"
@@ -14,24 +14,27 @@ edition = "2018"
 members = [ "fetcher" ]
 
 [dependencies]
-derive_more = "0.99.17"
-derive_setters = "0.1.5"
-derive-new = "0.5.9"
-digest = "0.10.1"
-filetime = "0.2.15"
-futures = "0.3.19"
-hex = "0.4.3"
-httpdate = "1.0.2"
-log = "0.4.14"
-md-5 = "0.10.0"
-numtoa = "0.2.4"
-remem = "0.1.0"
-serde = { version = "1.0.136", features = [ "derive" ] }
-sha2 = "0.10.1"
-thiserror = "1.0.30"
-isahc = "1.6.0"
-http = "0.2.6"
+derive_more = "0.99"
+derive_setters = "0.1"
+derive-new = "0.5"
+digest = "0.10"
+filetime = "0.2"
+futures = "0.3"
+hex = "0.4"
+httpdate = "1.0"
+log = "0.4"
+md-5 = "0.10"
+numtoa = "0.2"
+remem = "0.1"
+sha2 = "0.10"
+thiserror = "1.0"
+isahc = "1.6"
+http = "0.2"
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
 
 [dependencies.tokio]
-version = "1.16.1"
-features = ["fs", "io-util", "time"]
+version = "1.16"
+features = ["fs", "io-util", "sync", "time"]

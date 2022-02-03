@@ -1,91 +1,10 @@
 (
-    urls: ["http://apt.pop-os.org/staging/master/dists/bionic/main/binary-amd64/Packages.gz"], dest: "cache/Packages.gz"
+    urls: ["http://archive.ubuntu.com/ubuntu/pool/universe/r/rustc/rustc_1.53.0+dfsg1+llvm.orig.tar.xz"],
+    dest: "cache/rustc_1.53.0.tar.xz",
+    sum: Some(Sha256("1126c387579544bf8b3c239a51ed24f00404ed34373d58658a4fa1b0ae4b90db"))
 )
 (
-    urls: ["http://apt.pop-os.org/staging/master/dists/bionic/main/source/Sources.gz"], dest: "cache/Sources.gz"
-)
-
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-1.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-2.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-3.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-4.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-5.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-6.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-7.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-8.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-9.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-10.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-11.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
-)
-(
-    urls: [
-        "http://apt.pop-os.org/staging/master/pool/eoan/nvidia-graphics-drivers/libnvidia-gl-440_440.44-1pop1~1576524804~19.10~fb5b8b3_i386.deb",
-    ],
-    dest: "cache/nvidia-12.deb",
-    sum: Some(Sha256("59b4bc35109c47e3609b3b1b2707db4e9aec8480f1aea7204ace25eda1a7ef71")),
+    urls: ["http://archive.ubuntu.com/ubuntu/pool/universe/r/rustc/rustc_1.53.0+dfsg1+llvm.orig.tar.xz"],
+    dest: "cache/rustc_1.53.0v2.tar.xz",
+    sum: Some(Sha256("1126c387579544bf8b3c239a51ed24f00404ed34373d58658a4fa1b0ae4b90db"))
 )

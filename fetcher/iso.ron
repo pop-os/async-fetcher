@@ -1,0 +1,5 @@
+(
+    urls: ["https://pop-iso.sfo2.cdn.digitaloceanspaces.com/21.10/amd64/nvidia/6/pop-os_21.10_amd64_nvidia_6.iso"],
+    dest: "cache/pop-os_21.10_amd64_nvidia_6.iso",
+    sum: Some(Sha256("7684e9b5ced3397b549d805c2a8b76182abb5edd1f6c1583410728fcad95d19c")),
+)

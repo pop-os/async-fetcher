@@ -1,10 +1,10 @@
-// Copyright 2021 System76 <info@system76.com>
+// Copyright 2021-2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::execute;
 
-use async_fetcher::{ChecksumSystem, FetchEvent};
-use futures::{channel::mpsc, prelude::*};
+use async_fetcher::{checksum_stream, FetchEvent};
+use futures::prelude::*;
 use pbr::{MultiBar, Pipe, ProgressBar, Units};
 use std::{
     collections::HashMap,
@@ -15,6 +15,7 @@ use std::{
     },
     time::Duration,
 };
+use tokio::sync::mpsc;
 
 pub async fn run(
     etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
@@ -30,7 +31,7 @@ pub async fn run(
         async move {
             let mut state = HashMap::<Arc<Path>, ProgressBar<Pipe>>::new();
 
-            while let Some((dest, event)) = erx.next().await {
+            while let Some((dest, event)) = erx.recv().await {
                 match event {
                     FetchEvent::Progress(written) => {
                         if let Some(bar) = state.get_mut(&dest) {
@@ -72,9 +73,9 @@ pub async fn run(
         }
     };
 
-    let (fetch_tx, mut fetch_rx) = mpsc::channel::<(Arc<Path>, _)>(0);
+    let (fetch_tx, mut fetch_rx) = mpsc::channel::<(Arc<Path>, _)>(1);
     let fetch_results = async move {
-        while let Some((dest, result)) = fetch_rx.next().await {
+        while let Some((dest, result)) = fetch_rx.recv().await {
             match result {
                 Ok(false) => epintln!((dest.display()) " was successfully fetched"),
                 Ok(true) => epintln!((dest.display()) " is now validating"),
@@ -83,16 +84,15 @@ pub async fn run(
         }
     };
 
-    let (sum_tx, sum_rx) = mpsc::channel::<(Arc<Path>, _)>(0);
+    let (sum_tx, sum_rx) = mpsc::channel::<(Arc<Path>, _)>(1);
     let sum_results = async move {
-        let mut stream = ChecksumSystem::new()
-            .build(sum_rx)
+        let mut stream = checksum_stream(tokio_stream::wrappers::ReceiverStream::new(sum_rx))
             // Distribute each checksum future across a thread pool.
-            .map(|future| blocking::unblock(|| async_io::block_on(future)))
+            .map(|future| tokio::task::spawn_blocking(|| futures::executor::block_on(future)))
             // Limiting up to 32 concurrent tasks at a time.
             .buffer_unordered(32);
 
-        while let Some((dest, result)) = stream.next().await {
+        while let Some(Ok((dest, result))) = stream.next().await {
             match result {
                 Ok(()) => epintln!((dest.display()) " was successfully validated"),
                 Err(why) => epintln!((dest.display()) " failed to validate: " [why]),
@@ -111,8 +111,9 @@ pub async fn run(
 
     let progress_ticker = async {
         while !complete.load(Ordering::SeqCst) {
+            eprintln!("update");
             let _ = progress.listen();
-            async_io::Timer::after(Duration::from_millis(1000)).await;
+            tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     };
 

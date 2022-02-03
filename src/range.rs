@@ -4,9 +4,12 @@
 use numtoa::NumToA;
 use std::num::NonZeroU64;
 
-pub fn generate(mut length: u64, max_part_size: NonZeroU64) -> impl Iterator<Item = (u64, u64)> {
-    let mut offset = 0u64;
-
+pub fn generate(
+    mut length: u64,
+    max_part_size: NonZeroU64,
+    mut offset: u64,
+) -> impl Iterator<Item = (u64, u64)> + Send + 'static {
+    length -= offset;
     std::iter::from_fn(move || {
         if length == 0 {
             return None;
@@ -26,14 +29,18 @@ pub fn generate(mut length: u64, max_part_size: NonZeroU64) -> impl Iterator<Ite
     })
 }
 
-pub(crate) fn to_string(from: u64, to: u64) -> String {
+pub(crate) fn to_string(from: u64, to: Option<u64>) -> String {
     let mut from_a = [0u8; 20];
     let mut to_a = [0u8; 20];
     [
         "bytes=",
         from.numtoa_str(10, &mut from_a),
         "-",
-        to.numtoa_str(10, &mut to_a),
+        if let Some(to) = to {
+            to.numtoa_str(10, &mut to_a)
+        } else {
+            ""
+        },
     ]
     .concat()
 }

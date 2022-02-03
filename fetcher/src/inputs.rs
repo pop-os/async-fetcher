@@ -1,14 +1,15 @@
-// Copyright 2021 System76 <info@system76.com>
+// Copyright 2021-2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::checksum::{Checksum, SumStrBuf};
 
 use async_fetcher::Source;
-use async_fs::File;
+use bytes::BytesMut;
 use futures::prelude::*;
-use futures_codec::{BytesMut, Decoder, FramedRead};
 use serde::Deserialize;
 use std::{convert::TryFrom, io, path::PathBuf};
+use tokio::fs::File;
+use tokio_util::codec::{Decoder, FramedRead};
 
 #[derive(Debug, Error)]
 pub enum InputError {
@@ -41,8 +42,10 @@ impl Decoder for Inputs {
             if line[0] == b')' {
                 let value = ron::de::from_bytes::<Input>(&src[..read - 1]);
 
-                let remaining = src.len() - read;
-                src.as_mut().copy_within(read.., 0);
+                eprintln!("({})", String::from_utf8_lossy(&src[..read - 1]));
+
+                let remaining = src.len() + 1 - read;
+                src.as_mut().copy_within(read - 1.., 0);
                 src.truncate(remaining);
 
                 return value.map(Some).map_err(|source| InputError::Decoder {
