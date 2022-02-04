@@ -191,11 +191,11 @@ impl Fetcher {
     }
 
     /// Build a stream that will perform fetches when polled.
-    pub fn build_stream<ExtraType>(
+    pub fn requests_stream<ExtraType>(
         self: Arc<Self>,
         inputs: impl Stream<Item = (Source, ExtraType)> + Unpin + Send + 'static,
     ) -> impl Stream<
-        Item = impl Future<Output = (Arc<Path>, Result<ExtraType, Error>)> + Send + 'static,
+        Item = impl Future<Output = (Arc<Path>, ExtraType, Result<(), Error>)> + Send + 'static,
     > + Send
            + Unpin
            + 'static
@@ -222,7 +222,7 @@ impl Fetcher {
 
                 fetcher.send((dest.clone(), FetchEvent::Fetched));
 
-                (dest, result.map(|_| extra))
+                (dest, extra, result)
             }
         })
     }

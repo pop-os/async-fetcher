@@ -71,18 +71,17 @@ async fn fetcher_stream<S: Unpin + Send + Stream<Item = (Source, Option<Checksum
         // Finalize the fetcher so that it can perform fetch tasks.
         .build()
         // Build a stream that will perform fetches when polled.
-        .build_stream(sources)
+        .requests_stream(sources)
         // Concurrently fetch up to 4 at a time
         .buffer_unordered(4);
 
-    while let Some((dest, result)) = fetcher.next().await {
+    while let Some((dest, checksum, result)) = fetcher.next().await {
         match result {
-            Ok(Some(checksum)) => {
+            Ok(()) => {
                 let _ = result_sender.send((dest.clone(), Ok(true)));
-                let _ = checksum_sender.send((dest, checksum)).await;
-            }
-            Ok(None) => {
-                let _ = result_sender.send((dest, Ok(false))).await;
+                if let Some(checksum) = checksum {
+                    let _ = checksum_sender.send((dest, checksum)).await;
+                }
             }
             Err(why) => {
                 let _ = result_sender.send((dest, Err(why))).await;
