@@ -7,9 +7,8 @@ use md5::Md5;
 use serde::Deserialize;
 use sha2::Sha256;
 use std::{convert::TryFrom, io};
-use tokio::io::{AsyncRead, AsyncReadExt};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Checksum {
     Md5(GenericArray<u8, <Md5 as OutputSizeUser>::OutputSize>),
     Sha256(GenericArray<u8, <Sha256 as OutputSizeUser>::OutputSize>),
@@ -59,19 +58,19 @@ impl<'a> TryFrom<SumStr<'a>> for Checksum {
 }
 
 impl Checksum {
-    pub async fn validate<F: AsyncRead + Unpin>(
+    pub fn validate<F: std::io::Read>(
         &self,
         reader: F,
         buffer: &mut [u8],
     ) -> Result<(), ChecksumError> {
         match self {
-            Checksum::Md5(sum) => checksum::<Md5, F>(reader, buffer, sum).await,
-            Checksum::Sha256(sum) => checksum::<Sha256, F>(reader, buffer, sum).await,
+            Checksum::Md5(sum) => checksum::<Md5, F>(reader, buffer, sum),
+            Checksum::Sha256(sum) => checksum::<Sha256, F>(reader, buffer, sum),
         }
     }
 }
 
-async fn checksum<D: Digest, F: AsyncRead + Unpin>(
+fn checksum<D: Digest, F: std::io::Read>(
     mut reader: F,
     buffer: &mut [u8],
     expected: &GenericArray<u8, D::OutputSize>,
@@ -80,7 +79,7 @@ async fn checksum<D: Digest, F: AsyncRead + Unpin>(
     let mut read;
 
     loop {
-        read = reader.read(buffer).await.map_err(ChecksumError::IO)?;
+        read = reader.read(buffer).map_err(ChecksumError::IO)?;
 
         if read == 0 {
             let result = hasher.finalize();

@@ -1,6 +1,6 @@
 [package]
 name = "async-fetcher"
-version = "0.5.0"
+version = "0.6.1"
 repository = "https://github.com/pop-os/async-fetcher"
 authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
 description = "Asynchronous multi-connection multi-download resumable HTTP file fetching state machine"
@@ -37,4 +37,4 @@ features = ["derive"]
 
 [dependencies.tokio]
 version = "1.16"
-features = ["fs", "io-util", "sync", "time"]
+features = ["fs", "io-util", "rt", "sync", "time"]

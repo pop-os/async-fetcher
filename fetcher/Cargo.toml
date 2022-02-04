@@ -1,6 +1,6 @@
 [package]
 name = "fetcher"
-version = "0.4.1"
+version = "0.6.1"
 authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
 edition = "2018"
 license = "MPL-2.0"
@@ -16,7 +16,6 @@ ron = "0.7"
 serde = { version = "1.0", features = [ "derive" ] }
 thiserror = "1.0"
 bytes = "1.1"
-console-subscriber = "0.1"
 tokio-stream = "0.1"
 
 [dependencies.tokio-util]

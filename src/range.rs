@@ -10,6 +10,7 @@ pub fn generate(
     mut offset: u64,
 ) -> impl Iterator<Item = (u64, u64)> + Send + 'static {
     length -= offset;
+
     std::iter::from_fn(move || {
         if length == 0 {
             return None;

@@ -7,6 +7,7 @@ use async_fetcher::Source;
 use bytes::BytesMut;
 use futures::prelude::*;
 use serde::Deserialize;
+use std::sync::Arc;
 use std::{convert::TryFrom, io, path::PathBuf};
 use tokio::fs::File;
 use tokio_util::codec::{Decoder, FramedRead};
@@ -67,7 +68,7 @@ struct Input {
     sum: Option<SumStrBuf>,
 }
 
-pub fn stream(input: File) -> impl Stream<Item = (Source, Option<Checksum>)> + Send + Unpin {
+pub fn stream(input: File) -> impl Stream<Item = (Source, Arc<Option<Checksum>>)> + Send + Unpin {
     FramedRead::new(input, Inputs::default())
         .filter_map(|result| async move {
             match result {
@@ -89,7 +90,7 @@ pub fn stream(input: File) -> impl Stream<Item = (Source, Option<Checksum>)> + S
                         None => None,
                     };
 
-                    Some((source, sum))
+                    Some((source, Arc::new(sum)))
                 }
                 Err(InputError::Read(why)) => {
                     epintln!("read error: "(why));

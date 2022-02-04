@@ -30,9 +30,8 @@ use tokio::sync::mpsc;
 #[tokio::main]
 async fn main() {
     better_panic::install();
-    console_subscriber::init();
 
-    let (tx, rx) = mpsc::unbounded_channel::<(Arc<Path>, FetchEvent)>();
+    let (tx, rx) = mpsc::unbounded_channel::<(Arc<Path>, Arc<Option<Checksum>>, FetchEvent)>();
 
     if atty::is(atty::Stream::Stdout) {
         interactive::run(tx, rx).await
@@ -42,7 +41,7 @@ async fn main() {
 }
 
 async fn execute(
-    etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
+    etx: mpsc::UnboundedSender<(Arc<Path>, Arc<Option<Checksum>>, FetchEvent)>,
     result_sender: mpsc::Sender<(Arc<Path>, Result<bool, FetchError>)>,
     checksum_sender: mpsc::Sender<(Arc<Path>, Checksum)>,
 ) {
@@ -55,8 +54,10 @@ async fn execute(
 }
 
 /// The fetcher, which will be used to create futures for fetching files.
-async fn fetcher_stream<S: Unpin + Send + Stream<Item = (Source, Option<Checksum>)> + 'static>(
-    event_sender: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
+async fn fetcher_stream<
+    S: Unpin + Send + Stream<Item = (Source, Arc<Option<Checksum>>)> + 'static,
+>(
+    event_sender: mpsc::UnboundedSender<(Arc<Path>, Arc<Option<Checksum>>, FetchEvent)>,
     result_sender: mpsc::Sender<(Arc<Path>, Result<bool, FetchError>)>,
     checksum_sender: mpsc::Sender<(Arc<Path>, Checksum)>,
     sources: S,
@@ -79,8 +80,8 @@ async fn fetcher_stream<S: Unpin + Send + Stream<Item = (Source, Option<Checksum
         match result {
             Ok(()) => {
                 let _ = result_sender.send((dest.clone(), Ok(true)));
-                if let Some(checksum) = checksum {
-                    let _ = checksum_sender.send((dest, checksum)).await;
+                if let Some(checksum) = checksum.as_ref() {
+                    let _ = checksum_sender.send((dest, checksum.clone())).await;
                 }
             }
             Err(why) => {

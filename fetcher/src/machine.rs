@@ -3,7 +3,7 @@
 
 use crate::execute;
 
-use async_fetcher::{checksum_stream, FetchEvent};
+use async_fetcher::{checksum::Checksum, checksum_stream, FetchEvent};
 use futures::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -16,8 +16,8 @@ use std::{
 use tokio::sync::mpsc;
 
 pub async fn run(
-    etx: mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>,
-    mut erx: mpsc::UnboundedReceiver<(Arc<Path>, FetchEvent)>,
+    etx: mpsc::UnboundedSender<(Arc<Path>, Arc<Option<Checksum>>, FetchEvent)>,
+    mut erx: mpsc::UnboundedReceiver<(Arc<Path>, Arc<Option<Checksum>>, FetchEvent)>,
 ) {
     let (events_tx, mut events_rx) = mpsc::channel(1);
 
@@ -25,8 +25,7 @@ pub async fn run(
     let events_tx_ = events_tx.clone();
     let fetch_events = async move {
         let mut state = HashMap::<Arc<Path>, (u64, u64, Instant)>::new();
-
-        while let Some((dest, event)) = erx.recv().await {
+        while let Some((dest, _checksum, event)) = erx.recv().await {
             let event = match event {
                 FetchEvent::Progress(written) => {
                     if let Some(progress) = state.get_mut(&dest) {
@@ -106,12 +105,10 @@ pub async fn run(
     let (sum_tx, sum_rx) = mpsc::channel::<(Arc<Path>, _)>(1);
     let sum_results = async move {
         let mut stream = checksum_stream(tokio_stream::wrappers::ReceiverStream::new(sum_rx))
-            // Distribute each checksum future across a thread pool.
-            .map(|future| tokio::task::spawn_blocking(|| futures::executor::block_on(future)))
-            // Limiting up to 32 concurrent tasks at a time.
+            // Limiting up to 32 parallel tasks at a time.
             .buffer_unordered(32);
 
-        while let Some(Ok((dest, result))) = stream.next().await {
+        while let Some((dest, result)) = stream.next().await {
             let event = match result {
                 Ok(()) => Output(fomat!((dest.display())), OutputEvent::Validated),
 

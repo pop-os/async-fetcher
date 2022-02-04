@@ -44,7 +44,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-pub type EventSender = mpsc::UnboundedSender<(Arc<Path>, FetchEvent)>;
+pub type EventSender<Data> = mpsc::UnboundedSender<(Arc<Path>, Data, FetchEvent)>;
 pub type Output<T> = (Arc<Path>, Result<T, Error>);
 
 /// An error from the asynchronous file fetcher.
@@ -139,7 +139,7 @@ pub enum FetchEvent {
 /// application. A single-threaded runtime is generally recommended for fetching files,
 /// as your network connection is unlikely to be faster than a single CPU core.
 #[derive(new, Setters)]
-pub struct Fetcher {
+pub struct Fetcher<Data> {
     #[setters(skip)]
     client: Client,
 
@@ -169,10 +169,10 @@ pub struct Fetcher {
     #[new(default)]
     #[setters(into)]
     #[setters(strip_option)]
-    events: Option<Arc<EventSender>>,
+    events: Option<Arc<EventSender<Arc<Data>>>>,
 }
 
-impl Default for Fetcher {
+impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
         Self::new(
             Client::builder()
@@ -184,24 +184,21 @@ impl Default for Fetcher {
     }
 }
 
-impl Fetcher {
+impl<Data: Send + Sync + 'static> Fetcher<Data> {
     /// Finalizes the fetcher to prepare it for fetch tasks.
     pub fn build(self) -> Arc<Self> {
         Arc::new(self)
     }
 
     /// Build a stream that will perform fetches when polled.
-    pub fn requests_stream<ExtraType>(
+    pub fn requests_stream(
         self: Arc<Self>,
-        inputs: impl Stream<Item = (Source, ExtraType)> + Unpin + Send + 'static,
+        inputs: impl Stream<Item = (Source, Arc<Data>)> + Unpin + Send + 'static,
     ) -> impl Stream<
-        Item = impl Future<Output = (Arc<Path>, ExtraType, Result<(), Error>)> + Send + 'static,
+        Item = impl Future<Output = (Arc<Path>, Arc<Data>, Result<(), Error>)> + Send + 'static,
     > + Send
            + Unpin
-           + 'static
-    where
-        ExtraType: Send + 'static,
-    {
+           + 'static {
         inputs.map(move |(source, extra)| {
             let fetcher = self.clone();
 
@@ -210,17 +207,26 @@ impl Fetcher {
                     dest, urls, part, ..
                 } = source;
 
-                fetcher.send((dest.clone(), FetchEvent::Fetching));
+                fetcher.send(|| (dest.clone(), extra.clone(), FetchEvent::Fetching));
 
                 let result = match part {
-                    Some(part) => match fetcher.clone().request(urls, part.clone()).await {
+                    Some(part) => match fetcher
+                        .clone()
+                        .request(urls, part.clone(), extra.clone())
+                        .await
+                    {
                         Ok(()) => fs::rename(&*part, &*dest).await.map_err(Error::Rename),
                         Err(why) => Err(why),
                     },
-                    None => fetcher.clone().request(urls, dest.clone()).await,
+                    None => {
+                        fetcher
+                            .clone()
+                            .request(urls, dest.clone(), extra.clone())
+                            .await
+                    }
                 };
 
-                fetcher.send((dest.clone(), FetchEvent::Fetched));
+                fetcher.send(|| (dest.clone(), extra.clone(), FetchEvent::Fetched));
 
                 (dest, extra, result)
             }
@@ -235,14 +241,23 @@ impl Fetcher {
         self: Arc<Self>,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
+        extra: Arc<Data>,
     ) -> Result<(), Error> {
         remove_parts(&to).await;
 
-        let result = match self.clone().inner_request(uris.clone(), to.clone()).await {
+        let result = match self
+            .clone()
+            .inner_request(uris.clone(), to.clone(), extra.clone())
+            .await
+        {
             Ok(()) => Ok(()),
             Err(mut why) => {
                 for _ in 1..self.retries.get() {
-                    match self.clone().inner_request(uris.clone(), to.clone()).await {
+                    match self
+                        .clone()
+                        .inner_request(uris.clone(), to.clone(), extra.clone())
+                        .await
+                    {
                         Ok(()) => return Ok(()),
                         Err(cause) => why = cause,
                     }
@@ -261,19 +276,19 @@ impl Fetcher {
         self: Arc<Self>,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
+        extra: Arc<Data>,
     ) -> Result<(), Error> {
         let mut modified = None;
         let mut length = None;
-        let mut if_modified_since = None;
         let mut resume = None;
 
         // If the file already exists, validate that it is the same.
         if to.exists() {
             if let Some(response) = head(&self.client, &*uris[0]).await? {
-                let content_length = response.content_length();
+                length = response.content_length();
                 modified = response.last_modified();
 
-                if let (Some(content_length), Some(last_modified)) = (content_length, modified) {
+                if let (Some(length), Some(last_modified)) = (length, modified) {
                     match fs::metadata(to.as_ref()).await {
                         Ok(metadata) => {
                             let modified = metadata.modified().map_err(Error::Write)?;
@@ -281,16 +296,18 @@ impl Fetcher {
                                 .duration_since(UNIX_EPOCH)
                                 .expect("time went backwards");
 
-                            if metadata.len() == content_length
-                                && ts.as_secs() == date_as_timestamp(last_modified)
-                            {
-                                self.send((to, FetchEvent::AlreadyFetched));
-                                return Ok(());
+                            if metadata.len() == length {
+                                if ts.as_secs() == date_as_timestamp(last_modified) {
+                                    self.send(|| (to, extra.clone(), FetchEvent::AlreadyFetched));
+                                    return Ok(());
+                                } else {
+                                    let _ = fs::remove_file(to.as_ref())
+                                        .await
+                                        .map_err(Error::MetadataRemove)?;
+                                }
+                            } else {
+                                resume = Some(metadata.len());
                             }
-
-                            if_modified_since = Some(HttpDate::from(modified));
-                            length = Some(content_length);
-                            resume = Some(metadata.len());
                         }
                         Err(why) => {
                             error!("failed to fetch metadata of {:?}: {}", to, why);
@@ -307,55 +324,89 @@ impl Fetcher {
         if let Some(connections) = self.connections_per_file {
             if let Some(response) = head(&self.client, &*uris[0]).await? {
                 modified = response.last_modified();
-                let length = match length {
+                length = match length {
                     Some(length) => Some(length),
                     None => response.content_length(),
                 };
 
+                let resume = resume.unwrap_or(0);
+
                 if let Some(length) = length {
-                    if supports_range(&self.client, &*uris[0], Some(length)).await? {
-                        self.send((to.clone(), FetchEvent::ContentLength(length)));
-                        if let Some(resume) = resume {
-                            self.send((to.clone(), FetchEvent::Progress(resume)));
+                    if supports_range(&self.client, &*uris[0], resume, Some(length)).await? {
+                        self.send(|| {
+                            (to.clone(), extra.clone(), FetchEvent::ContentLength(length))
+                        });
+
+                        if resume != 0 {
+                            self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(resume)));
                         }
 
-                        return self
-                            .get_many(length, connections.get(), uris, to, modified, resume)
-                            .await;
+                        self.get_many(
+                            length,
+                            connections.get(),
+                            uris,
+                            to.clone(),
+                            modified,
+                            resume,
+                            extra,
+                        )
+                        .await?;
+
+                        if let Some(modified) = modified {
+                            let filetime =
+                                FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
+                            filetime::set_file_times(&to, filetime, filetime)
+                                .map_err(move |why| Error::FileTime(to, why))?;
+                        }
+
+                        return Ok(());
                     }
+                }
+            }
+        }
+
+        if let Some(length) = length {
+            self.send(|| (to.clone(), extra.clone(), FetchEvent::ContentLength(length)));
+        }
+
+        if let Some(r) = resume {
+            if let Some(length) = length {
+                if r > length {
+                    resume = None;
                 }
             }
         }
 
         let mut request = Request::get(&*uris[0]);
 
-        if let Some(modified_since) = if_modified_since {
-            request = request.header(
-                "if-modified-since",
-                httpdate::fmt_http_date(modified_since.into()),
-            );
-        }
-
-        if let Some(length) = length {
-            self.send((to.clone(), FetchEvent::ContentLength(length)));
-        }
-
-        if resume.is_some() {
-            match supports_range(&self.client, &*uris[0], None).await {
-                Ok(true) => (),
+        if let Some(r) = resume {
+            match supports_range(&self.client, &*uris[0], r, length).await {
+                Ok(true) => {
+                    request = request.header("Range", range::to_string(r, length));
+                }
                 _ => resume = None,
             }
         }
 
+        let resume = resume.unwrap_or(0);
+
         let path = match self
-            .get(&mut modified, request, to.clone(), to.clone(), None, resume)
+            .get(
+                &mut modified,
+                request,
+                to.clone(),
+                length,
+                resume,
+                extra.clone(),
+            )
             .await
         {
             Ok(path) => path,
+            Err(Error::Status(StatusCode::NOT_MODIFIED)) => to,
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
                 let request = Request::get(&*uris[0]);
-                self.get(&mut modified, request, to.clone(), to, None, resume)
+                self.get(&mut modified, request, to, length, resume, extra)
                     .await?
             }
             Err(why) => return Err(why),
@@ -373,23 +424,19 @@ impl Fetcher {
     async fn get(
         &self,
         modified: &mut Option<HttpDate>,
-        mut request: http::request::Builder,
+        request: http::request::Builder,
         to: Arc<Path>,
-        dest: Arc<Path>,
         length: Option<u64>,
-        resume: Option<u64>,
+        offset: u64,
+        extra: Arc<Data>,
     ) -> Result<Arc<Path>, Error> {
-        if let Some(resume) = resume {
-            request = request.header("Range", range::to_string(resume, None));
-        }
-
         let request = request.body(()).expect("failed to build request");
 
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
-            .append(resume.is_some())
-            .truncate(resume.is_none())
+            .append(offset != 0)
+            .truncate(offset == 0)
             .open(to.as_ref())
             .await
             .map_err(Error::FileCreate)?;
@@ -398,7 +445,7 @@ impl Fetcher {
             file.set_len(length).await.map_err(Error::Write)?;
         }
 
-        let response = &mut validate(if let Some(duration) = self.timeout {
+        let initial_response = if let Some(duration) = self.timeout {
             timed(
                 duration,
                 Box::pin(async { self.client.send_async(request).await.map_err(Error::from) }),
@@ -406,17 +453,19 @@ impl Fetcher {
             .await??
         } else {
             self.client.send_async(request).await?
-        })?;
+        };
+
+        if initial_response.status() == StatusCode::NOT_MODIFIED {
+            return Ok(to);
+        }
+
+        let response = &mut validate(initial_response)?;
 
         if modified.is_none() {
             *modified = response.last_modified();
         }
 
-        if response.status() == StatusCode::NOT_MODIFIED {
-            return Ok(to);
-        }
-
-        let buffer = &mut [0u8; 8 * 1024];
+        let mut buffer = vec![0u8; 8 * 1024];
         let mut read;
 
         loop {
@@ -424,23 +473,35 @@ impl Fetcher {
                 return Err(Error::Cancelled);
             }
 
-            let reader = async { response.body_mut().read(buffer).await.map_err(Error::Write) };
+            read = {
+                let reader = async {
+                    response
+                        .body_mut()
+                        .read(&mut buffer)
+                        .await
+                        .map_err(Error::Write)
+                };
 
-            read = match self.timeout {
-                Some(duration) => timed(duration, Box::pin(reader)).await??,
-                None => reader.await?,
+                futures::pin_mut!(reader);
+
+                match self.timeout {
+                    Some(duration) => timed(duration, reader).await??,
+                    None => reader.await?,
+                }
             };
 
-            if read != 0 {
-                self.send((dest.clone(), FetchEvent::Progress(read as u64)));
+            if read == 0 {
+                break;
+            } else {
+                self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(read as u64)));
 
                 file.write_all(&buffer[..read])
                     .await
                     .map_err(Error::Write)?;
-            } else {
-                break;
             }
         }
+
+        let _ = file.flush().await;
 
         Ok(to)
     }
@@ -452,7 +513,8 @@ impl Fetcher {
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         mut modified: Option<HttpDate>,
-        resume: Option<u64>,
+        offset: u64,
+        extra: Arc<Data>,
     ) -> Result<(), Error> {
         let parent = to.parent().ok_or(Error::Parentless)?;
         let filename = to.file_name().ok_or(Error::Nameless)?;
@@ -463,13 +525,11 @@ impl Fetcher {
         let concatenated_file = &mut tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
-            .append(resume.is_some())
-            .truncate(resume.is_none())
+            .append(offset != 0)
+            .truncate(offset == 0)
             .open(to.as_ref())
             .await
             .map_err(Error::FileCreate)?;
-
-        let offset = resume.unwrap_or(0);
 
         let max_part_size =
             NonZeroU64::new(self.max_part_size.get() as u64).expect("max part size is 0");
@@ -488,11 +548,18 @@ impl Fetcher {
 
                 let fetcher = self.clone();
                 let to = to_.clone();
+                let extra = extra.clone();
 
                 async move {
                     let range = range::to_string(range_start, Some(range_end));
 
-                    fetcher.send((to.clone(), FetchEvent::PartFetching(partn as u64)));
+                    fetcher.send(|| {
+                        (
+                            to.clone(),
+                            extra.clone(),
+                            FetchEvent::PartFetching(partn as u64),
+                        )
+                    });
 
                     let request = Request::get(&*uri).header("range", range.as_str());
 
@@ -501,13 +568,13 @@ impl Fetcher {
                             &mut modified,
                             request,
                             part_path.into(),
-                            to.clone(),
                             Some(range_end - range_start),
-                            None,
+                            0,
+                            extra.clone(),
                         )
                         .await;
 
-                    fetcher.send((to, FetchEvent::PartFetched(partn as u64)));
+                    fetcher.send(|| (to, extra.clone(), FetchEvent::PartFetched(partn as u64)));
 
                     result
                 }
@@ -535,9 +602,9 @@ impl Fetcher {
             .map_or(false, |cancel| cancel.load(Ordering::SeqCst))
     }
 
-    fn send(&self, event: (Arc<Path>, FetchEvent)) {
+    fn send(&self, event: impl FnOnce() -> (Arc<Path>, Arc<Data>, FetchEvent)) {
         if let Some(sender) = self.events.as_ref() {
-            let _ = sender.send(event);
+            let _ = sender.send(event());
         }
     }
 }
@@ -547,7 +614,8 @@ pub async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBod
 
     match validate(client.send_async(request).await?).map(Some) {
         result @ Ok(_) => result,
-        Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
+        Err(Error::Status(StatusCode::NOT_MODIFIED))
+        | Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
         Err(other) => Err(other),
     }
 }
@@ -555,17 +623,26 @@ pub async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBod
 pub async fn supports_range(
     client: &Client,
     uri: &str,
+    resume: u64,
     length: Option<u64>,
 ) -> Result<bool, Error> {
     let request = Request::head(uri)
-        .header("range", range::to_string(0, length).as_str())
+        .header("Range", range::to_string(resume, length).as_str())
         .body(())
         .unwrap();
 
     let response = client.send_async(request).await?;
 
     if response.status() == StatusCode::PARTIAL_CONTENT {
-        Ok(true)
+        if let Some(header) = response.headers().get("Content-Range") {
+            if let Ok(header) = header.to_str() {
+                if header.starts_with(&format!("bytes {}-", resume)) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     } else {
         validate(response).map(|_| false)
     }
