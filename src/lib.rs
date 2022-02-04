@@ -236,7 +236,9 @@ impl Fetcher {
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
     ) -> Result<(), Error> {
-        match self.clone().inner_request(uris.clone(), to.clone()).await {
+        remove_parts(&to).await;
+
+        let result = match self.clone().inner_request(uris.clone(), to.clone()).await {
             Ok(()) => Ok(()),
             Err(mut why) => {
                 for _ in 1..self.retries.get() {
@@ -248,7 +250,11 @@ impl Fetcher {
 
                 Err(why)
             }
-        }
+        };
+
+        remove_parts(&to).await;
+
+        result
     }
 
     async fn inner_request(
@@ -619,4 +625,27 @@ pub fn date_as_timestamp(date: HttpDate) -> u64 {
         .duration_since(UNIX_EPOCH)
         .expect("time backwards")
         .as_secs()
+}
+
+/// Cleans up after a process that may have been aborted.
+async fn remove_parts(to: &Path) {
+    let original_filename = match to.file_name().and_then(|x| x.to_str()) {
+        Some(name) => name,
+        None => return,
+    };
+
+    if let Some(parent) = to.parent() {
+        if let Ok(mut dir) = tokio::fs::read_dir(parent).await {
+            while let Ok(Some(entry)) = dir.next_entry().await {
+                if let Some(entry_name) = entry.file_name().to_str() {
+                    if let Some(potential_part) = entry_name.strip_prefix(original_filename) {
+                        if potential_part.starts_with(".part") {
+                            let path = entry.path();
+                            let _ = tokio::fs::remove_file(path).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
