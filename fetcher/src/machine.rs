@@ -11,7 +11,6 @@ use std::{
     io::{self, Write},
     path::Path,
     sync::Arc,
-    time::Instant,
 };
 use tokio::sync::mpsc;
 
@@ -24,23 +23,16 @@ pub async fn run(
     // Handles all callback events from the fetcher
     let events_tx_ = events_tx.clone();
     let fetch_events = async move {
-        let mut state = HashMap::<Arc<Path>, (u64, u64, Instant)>::new();
+        let mut state = HashMap::<Arc<Path>, (u64, u64)>::new();
         while let Some((dest, _checksum, event)) = erx.recv().await {
             let event = match event {
                 FetchEvent::Progress(written) => {
                     if let Some(progress) = state.get_mut(&dest) {
                         progress.0 += written as u64;
-                        let now = Instant::now();
-
-                        if now.duration_since(progress.2).as_millis() > 250 {
-                            progress.2 = now;
-                            Output(
-                                fomat!((dest.display())),
-                                OutputEvent::Progress(progress.0, progress.1),
-                            )
-                        } else {
-                            continue;
-                        }
+                        Output(
+                            fomat!((dest.display())),
+                            OutputEvent::Progress(progress.0, progress.1),
+                        )
                     } else {
                         continue;
                     }
@@ -54,13 +46,13 @@ pub async fn run(
                     state
                         .entry(dest.clone())
                         .and_modify(|bar| bar.1 = length)
-                        .or_insert((0, length, Instant::now()));
+                        .or_insert((0, length));
 
                     Output(fomat!((dest.display())), OutputEvent::Length(length))
                 }
 
                 FetchEvent::Fetching => {
-                    state.insert(dest.clone(), (0, 0, Instant::now()));
+                    state.insert(dest.clone(), (0, 0));
                     Output(fomat!((dest.display())), OutputEvent::Fetching)
                 }
 

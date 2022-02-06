@@ -73,11 +73,10 @@ pub fn stream(input: File) -> impl Stream<Item = (Source, Arc<Option<Checksum>>)
         .filter_map(|result| async move {
             match result {
                 Ok(input) => {
-                    let mut source = Source::new(input.urls, PathBuf::from(input.dest));
+                    let mut source =
+                        Source::new(Arc::from(input.urls), Arc::from(PathBuf::from(input.dest)));
 
-                    if let Some(part) = input.part {
-                        source = source.part(PathBuf::from(part));
-                    }
+                    source.set_part(input.part.map(PathBuf::from).map(Arc::from));
 
                     let sum = match input.sum {
                         Some(sum) => match Checksum::try_from(sum.as_ref()) {

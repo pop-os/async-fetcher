@@ -13,12 +13,20 @@ extern crate thiserror;
 pub mod checksum;
 mod checksum_system;
 mod concatenator;
+mod get;
+mod get_many;
 mod range;
+mod source;
+mod time;
 
 pub use self::checksum_system::*;
 pub use self::concatenator::*;
+pub use self::source::*;
 
-use filetime::FileTime;
+use self::get::{get, FetchLocation};
+use self::get_many::get_many;
+use self::time::{date_as_timestamp, update_modified};
+
 use futures::{
     prelude::*,
     stream::{self, StreamExt},
@@ -38,10 +46,9 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 pub type EventSender<Data> = mpsc::UnboundedSender<(Arc<Path>, Data, FetchEvent)>;
@@ -78,38 +85,13 @@ pub enum Error {
     Rename(#[source] io::Error),
     #[error("server responded with an error: {}", _0)]
     Status(StatusCode),
+    #[error("internal tokio join handle error")]
+    TokioSpawn(#[source] tokio::task::JoinError),
 }
 
 impl From<isahc::Error> for Error {
     fn from(e: isahc::Error) -> Self {
         Self::Client(e)
-    }
-}
-
-/// Information about a source being fetched.
-#[derive(Debug, Setters)]
-pub struct Source {
-    /// URLs whereby the file can be found.
-    #[setters(skip)]
-    pub urls: Arc<[Box<str>]>,
-
-    /// Where the file shall ultimately be fetched to.
-    #[setters(skip)]
-    pub dest: Arc<Path>,
-
-    /// Optional location to store the partial file
-    #[setters(strip_option)]
-    #[setters(into)]
-    pub part: Option<Arc<Path>>,
-}
-
-impl Source {
-    pub fn new(urls: impl Into<Arc<[Box<str>]>>, dest: impl Into<Arc<Path>>) -> Self {
-        Self {
-            urls: urls.into(),
-            dest: dest.into(),
-            part: None,
-        }
     }
 }
 
@@ -203,11 +185,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             let fetcher = self.clone();
 
             async move {
-                let Source {
-                    dest, urls, part, ..
-                } = source;
-
-                fetcher.send(|| (dest.clone(), extra.clone(), FetchEvent::Fetching));
+                let Source { dest, urls, part } = source;
 
                 let result = match part {
                     Some(part) => match fetcher
@@ -226,8 +204,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     }
                 };
 
-                fetcher.send(|| (dest.clone(), extra.clone(), FetchEvent::Fetched));
-
                 (dest, extra, result)
             }
         })
@@ -243,6 +219,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         to: Arc<Path>,
         extra: Arc<Data>,
     ) -> Result<(), Error> {
+        self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetching));
+
         remove_parts(&to).await;
 
         let result = match self
@@ -269,6 +247,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         remove_parts(&to).await;
 
+        self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
+
         result
     }
 
@@ -278,43 +258,45 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         to: Arc<Path>,
         extra: Arc<Data>,
     ) -> Result<(), Error> {
-        let mut modified = None;
         let mut length = None;
-        let mut resume = None;
+        let mut modified = None;
+        let mut resume = 0;
+
+        let head_response = head(&self.client, &*uris[0]).await?;
+
+        if let Some(response) = head_response.as_ref() {
+            length = response.content_length();
+            modified = response.last_modified();
+        }
 
         // If the file already exists, validate that it is the same.
         if to.exists() {
-            if let Some(response) = head(&self.client, &*uris[0]).await? {
-                length = response.content_length();
-                modified = response.last_modified();
+            if let (Some(length), Some(last_modified)) = (length, modified) {
+                match fs::metadata(to.as_ref()).await {
+                    Ok(metadata) => {
+                        let modified = metadata.modified().map_err(Error::Write)?;
+                        let ts = modified
+                            .duration_since(UNIX_EPOCH)
+                            .expect("time went backwards");
 
-                if let (Some(length), Some(last_modified)) = (length, modified) {
-                    match fs::metadata(to.as_ref()).await {
-                        Ok(metadata) => {
-                            let modified = metadata.modified().map_err(Error::Write)?;
-                            let ts = modified
-                                .duration_since(UNIX_EPOCH)
-                                .expect("time went backwards");
-
-                            if metadata.len() == length {
-                                if ts.as_secs() == date_as_timestamp(last_modified) {
-                                    self.send(|| (to, extra.clone(), FetchEvent::AlreadyFetched));
-                                    return Ok(());
-                                } else {
-                                    let _ = fs::remove_file(to.as_ref())
-                                        .await
-                                        .map_err(Error::MetadataRemove)?;
-                                }
+                        if metadata.len() == length {
+                            if ts.as_secs() == date_as_timestamp(last_modified) {
+                                self.send(|| (to, extra.clone(), FetchEvent::AlreadyFetched));
+                                return Ok(());
                             } else {
-                                resume = Some(metadata.len());
+                                let _ = fs::remove_file(to.as_ref())
+                                    .await
+                                    .map_err(Error::MetadataRemove)?;
                             }
+                        } else {
+                            resume = metadata.len();
                         }
-                        Err(why) => {
-                            error!("failed to fetch metadata of {:?}: {}", to, why);
-                            fs::remove_file(to.as_ref())
-                                .await
-                                .map_err(Error::MetadataRemove)?;
-                        }
+                    }
+                    Err(why) => {
+                        error!("failed to fetch metadata of {:?}: {}", to, why);
+                        fs::remove_file(to.as_ref())
+                            .await
+                            .map_err(Error::MetadataRemove)?;
                     }
                 }
             }
@@ -322,275 +304,86 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         // If set, this will use multiple connections to download a file in parts.
         if let Some(connections) = self.connections_per_file {
-            if let Some(response) = head(&self.client, &*uris[0]).await? {
-                modified = response.last_modified();
-                length = match length {
-                    Some(length) => Some(length),
-                    None => response.content_length(),
-                };
+            if let Some(length) = length {
+                if supports_range(&self.client, &*uris[0], resume, Some(length)).await? {
+                    self.send(|| (to.clone(), extra.clone(), FetchEvent::ContentLength(length)));
 
-                let resume = resume.unwrap_or(0);
-
-                if let Some(length) = length {
-                    if supports_range(&self.client, &*uris[0], resume, Some(length)).await? {
-                        self.send(|| {
-                            (to.clone(), extra.clone(), FetchEvent::ContentLength(length))
-                        });
-
-                        if resume != 0 {
-                            self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(resume)));
-                        }
-
-                        self.get_many(
-                            length,
-                            connections.get(),
-                            uris,
-                            to.clone(),
-                            modified,
-                            resume,
-                            extra,
-                        )
-                        .await?;
-
-                        if let Some(modified) = modified {
-                            let filetime =
-                                FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
-                            filetime::set_file_times(&to, filetime, filetime)
-                                .map_err(move |why| Error::FileTime(to, why))?;
-                        }
-
-                        return Ok(());
+                    if resume != 0 {
+                        self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(resume)));
                     }
+
+                    get_many(
+                        self.clone(),
+                        to.clone(),
+                        uris,
+                        resume,
+                        length,
+                        connections.get(),
+                        modified,
+                        extra,
+                    )
+                    .await?;
+
+                    if let Some(modified) = modified {
+                        update_modified(&to, modified)?;
+                    }
+
+                    return Ok(());
                 }
             }
         }
 
         if let Some(length) = length {
             self.send(|| (to.clone(), extra.clone(), FetchEvent::ContentLength(length)));
-        }
 
-        if let Some(r) = resume {
-            if let Some(length) = length {
-                if r > length {
-                    resume = None;
-                }
+            if resume > length {
+                resume = 0;
             }
         }
 
         let mut request = Request::get(&*uris[0]);
 
-        if let Some(r) = resume {
-            match supports_range(&self.client, &*uris[0], r, length).await {
-                Ok(true) => {
-                    request = request.header("Range", range::to_string(r, length));
-                }
-                _ => resume = None,
+        if resume != 0 {
+            if let Ok(true) = supports_range(&self.client, &*uris[0], resume, length).await {
+                request = request.header("Range", range::to_string(resume, length));
+            } else {
+                resume = 0;
             }
         }
 
-        let resume = resume.unwrap_or(0);
-
-        let path = match self
-            .get(
-                &mut modified,
-                request,
-                to.clone(),
-                length,
-                resume,
-                extra.clone(),
-            )
-            .await
+        let path = match crate::get(
+            self.clone(),
+            request,
+            FetchLocation::create(to.clone(), length, resume != 0).await?,
+            to.clone(),
+            &mut modified,
+            extra.clone(),
+        )
+        .await
         {
             Ok(path) => path,
+
             Err(Error::Status(StatusCode::NOT_MODIFIED)) => to,
+
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
                 let request = Request::get(&*uris[0]);
-                self.get(&mut modified, request, to, length, resume, extra)
-                    .await?
+                crate::get(
+                    self.clone(),
+                    request,
+                    FetchLocation::create(to.clone(), length, resume != 0).await?,
+                    to.clone(),
+                    &mut modified,
+                    extra.clone(),
+                )
+                .await?
             }
+
             Err(why) => return Err(why),
         };
 
         if let Some(modified) = modified {
-            let filetime = FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
-            filetime::set_file_times(&path, filetime, filetime)
-                .map_err(move |why| Error::FileTime(path, why))?;
-        }
-
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        modified: &mut Option<HttpDate>,
-        request: http::request::Builder,
-        to: Arc<Path>,
-        length: Option<u64>,
-        offset: u64,
-        extra: Arc<Data>,
-    ) -> Result<Arc<Path>, Error> {
-        let request = request.body(()).expect("failed to build request");
-
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(offset != 0)
-            .truncate(offset == 0)
-            .open(to.as_ref())
-            .await
-            .map_err(Error::FileCreate)?;
-
-        if let Some(length) = length {
-            file.set_len(length).await.map_err(Error::Write)?;
-        }
-
-        let initial_response = if let Some(duration) = self.timeout {
-            timed(
-                duration,
-                Box::pin(async { self.client.send_async(request).await.map_err(Error::from) }),
-            )
-            .await??
-        } else {
-            self.client.send_async(request).await?
-        };
-
-        if initial_response.status() == StatusCode::NOT_MODIFIED {
-            return Ok(to);
-        }
-
-        let response = &mut validate(initial_response)?;
-
-        if modified.is_none() {
-            *modified = response.last_modified();
-        }
-
-        let mut buffer = vec![0u8; 8 * 1024];
-        let mut read;
-
-        loop {
-            if self.cancelled() {
-                return Err(Error::Cancelled);
-            }
-
-            read = {
-                let reader = async {
-                    response
-                        .body_mut()
-                        .read(&mut buffer)
-                        .await
-                        .map_err(Error::Write)
-                };
-
-                futures::pin_mut!(reader);
-
-                match self.timeout {
-                    Some(duration) => timed(duration, reader).await??,
-                    None => reader.await?,
-                }
-            };
-
-            if read == 0 {
-                break;
-            } else {
-                self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(read as u64)));
-
-                file.write_all(&buffer[..read])
-                    .await
-                    .map_err(Error::Write)?;
-            }
-        }
-
-        let _ = file.flush().await;
-
-        Ok(to)
-    }
-
-    async fn get_many(
-        self: Arc<Self>,
-        length: u64,
-        concurrent: u16,
-        uris: Arc<[Box<str>]>,
-        to: Arc<Path>,
-        mut modified: Option<HttpDate>,
-        offset: u64,
-        extra: Arc<Data>,
-    ) -> Result<(), Error> {
-        let parent = to.parent().ok_or(Error::Parentless)?;
-        let filename = to.file_name().ok_or(Error::Nameless)?;
-
-        let mut buf = [0u8; 20];
-
-        // The destination which parts will be concatenated to.
-        let concatenated_file = &mut tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(offset != 0)
-            .truncate(offset == 0)
-            .open(to.as_ref())
-            .await
-            .map_err(Error::FileCreate)?;
-
-        let max_part_size =
-            NonZeroU64::new(self.max_part_size.get() as u64).expect("max part size is 0");
-
-        let to_ = to.clone();
-        let parts = stream::iter(range::generate(length, max_part_size, offset).enumerate())
-            // Generate a future for fetching each part that a range describes.
-            .map(move |(partn, (range_start, range_end))| {
-                let uri = uris[partn % uris.len()].clone();
-
-                let part_path = {
-                    let mut new_filename = filename.to_os_string();
-                    new_filename.push(&[".part", partn.numtoa_str(10, &mut buf)].concat());
-                    parent.join(new_filename)
-                };
-
-                let fetcher = self.clone();
-                let to = to_.clone();
-                let extra = extra.clone();
-
-                async move {
-                    let range = range::to_string(range_start, Some(range_end));
-
-                    fetcher.send(|| {
-                        (
-                            to.clone(),
-                            extra.clone(),
-                            FetchEvent::PartFetching(partn as u64),
-                        )
-                    });
-
-                    let request = Request::get(&*uri).header("range", range.as_str());
-
-                    let result = fetcher
-                        .get(
-                            &mut modified,
-                            request,
-                            part_path.into(),
-                            Some(range_end - range_start),
-                            0,
-                            extra.clone(),
-                        )
-                        .await;
-
-                    fetcher.send(|| (to, extra.clone(), FetchEvent::PartFetched(partn as u64)));
-
-                    result
-                }
-            })
-            // Ensure that only this many connections are happenning concurrently at a
-            // time
-            .buffered(concurrent as usize)
-            // This type exploded the stack, and therefore needs to be boxed
-            .boxed();
-
-        concatenator(concatenated_file, parts).await?;
-
-        if let Some(modified) = modified {
-            let filetime = FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
-            filetime::set_file_times(&to, filetime, filetime)
-                .map_err(|why| Error::FileTime(to, why))?;
+            update_modified(&path, modified)?;
         }
 
         Ok(())
@@ -695,13 +488,6 @@ impl ResponseExt for Response<AsyncBody> {
             .ok()
             .map(HttpDate::from)
     }
-}
-
-pub fn date_as_timestamp(date: HttpDate) -> u64 {
-    SystemTime::from(date)
-        .duration_since(UNIX_EPOCH)
-        .expect("time backwards")
-        .as_secs()
 }
 
 /// Cleans up after a process that may have been aborted.
