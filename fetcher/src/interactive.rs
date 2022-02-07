@@ -65,6 +65,12 @@ pub async fn run(
                         }
                     }
 
+                    FetchEvent::Retrying => {
+                        if let Some(mut bar) = state.remove(&dest) {
+                            bar.finish_print(&fomat!("Retrying "(dest.display())));
+                        }
+                    }
+
                     _ => (),
                 }
             }

@@ -61,6 +61,11 @@ pub async fn run(
                     Output(fomat!((dest.display())), OutputEvent::Fetched)
                 }
 
+                FetchEvent::Retrying => {
+                    state.remove(&dest);
+                    Output(fomat!((dest.display())), OutputEvent::Retrying)
+                }
+
                 _ => continue,
             };
 
@@ -161,6 +166,7 @@ pub enum OutputEvent {
     Invalid,
     Length(u64),
     Progress(u64, u64),
+    Retrying,
     Validated,
     Validating,
 }

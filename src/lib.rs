@@ -1,6 +1,37 @@
 // Copyright 2021-2022 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
+//! Asynchronously fetch files from HTTP servers
+//!
+//! - Concurrently fetch multiple files at the same time.
+//! - Define alternative mirrors for the source of a file.
+//! - Use multiple concurrent connections per file.
+//! - Use mirrors for concurrent connections.
+//! - Resume a download which has been interrupted.
+//! - Progress events for fetches
+//!
+//! ```
+//! let results_stream = Fetcher::default()
+//!     // Define a max number of ranged connections per file.
+//!     .connections_per_file(NonZeroU16::try_from(4).ok())
+//!     // Max size of a connection's part, concatenated on completion.
+//!     .max_part_size(NonZeroU32::try_from(4 * 1024 * 1024).unwrap())
+//!     // An `Arc<AtomicBool>` which can be used to interrupt the download.
+//!     .cancel(cancellable)
+//!     // The channel for sending progress notifications.
+//!     .events(events_tx)
+//!     // Maximum number of retry attempts.
+//!     .retries(NonZeroU16::try_from(3).unwrap())
+//!     // How long to wait before aborting a download that hasn't progressed.
+//!     .timeout(Duration::from_secs(15))
+//!     // Finalize the struct into an `Arc` for use with fetching.
+//!     .build()
+//!     // Take a stream of `Source` inputs and generate a stream of fetches.
+//!     .requests_stream(input_stream)
+//!     // Fetches up to 8 sources concurrently
+//!     .buffered(8);
+//! ```
+
 #[macro_use]
 extern crate derive_new;
 #[macro_use]
@@ -112,6 +143,8 @@ pub enum FetchEvent {
     PartFetching(u64),
     /// Reports that a part has been fetched.
     PartFetched(u64),
+    /// Notification that a fetch is being re-attempted.
+    Retrying,
 }
 
 /// An asynchronous file fetcher for clients fetching files.
@@ -230,12 +263,15 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         {
             Ok(()) => Ok(()),
             Err(mut why) => {
-                for _ in 1..self.retries.get() {
-                    match self
+                for nth in 1..self.retries.get() {
+                    self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
+
+                    let result = self
                         .clone()
                         .inner_request(uris.clone(), to.clone(), extra.clone())
-                        .await
-                    {
+                        .await;
+
+                    match result {
                         Ok(()) => return Ok(()),
                         Err(cause) => why = cause,
                     }
