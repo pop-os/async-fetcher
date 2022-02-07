@@ -18,7 +18,6 @@ use async_fetcher::{Error as FetchError, *};
 use futures::prelude::*;
 use std::{
     io,
-    num::NonZeroU16,
     os::unix::io::{AsRawFd, FromRawFd},
     path::Path,
     sync::Arc,
@@ -64,7 +63,7 @@ async fn fetcher_stream<
 ) {
     let mut fetcher = Fetcher::default()
         // Fetch each file in parts, using up to 4 concurrent connections per file
-        .connections_per_file(NonZeroU16::new(4))
+        .connections_per_file(4)
         // Pass in the event sender which events will be sent to
         .events(event_sender)
         // Configure a timeout to bail when a connection stalls for too long

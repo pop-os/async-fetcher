@@ -10,7 +10,6 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     uris: Arc<[Box<str>]>,
     offset: u64,
     length: u64,
-    concurrent: u16,
     mut modified: Option<HttpDate>,
     extra: Arc<Data>,
 ) -> Result<(), Error> {
@@ -22,65 +21,65 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     let FetchLocation { ref mut file, .. } =
         FetchLocation::create(to.clone(), None, offset != 0).await?;
 
-    let max_part_size =
-        NonZeroU64::new(fetcher.max_part_size.get() as u64).expect("max part size is 0");
+    let concurrent_fetches = fetcher.connections_per_file as usize;
 
     let to_ = to.clone();
-    let parts = stream::iter(range::generate(length, max_part_size, offset).enumerate())
-        // Generate a future for fetching each part that a range describes.
-        .map(move |(partn, (range_start, range_end))| {
-            let uri = uris[partn % uris.len()].clone();
+    let parts =
+        stream::iter(range::generate(length, fetcher.max_part_size.into(), offset).enumerate())
+            // Generate a future for fetching each part that a range describes.
+            .map(move |(partn, (range_start, range_end))| {
+                let uri = uris[partn % uris.len()].clone();
 
-            let part_path = {
-                let mut new_filename = filename.to_os_string();
-                new_filename.push(&[".part", partn.numtoa_str(10, &mut buf)].concat());
-                parent.join(new_filename)
-            };
-
-            let fetcher = fetcher.clone();
-            let to = to_.clone();
-            let extra = extra.clone();
-
-            async move {
-                let ranged_fetch = async move {
-                    let range = range::to_string(range_start, Some(range_end));
-
-                    fetcher.send(|| {
-                        (
-                            to.clone(),
-                            extra.clone(),
-                            FetchEvent::PartFetching(partn as u64),
-                        )
-                    });
-
-                    let result = crate::get(
-                        fetcher.clone(),
-                        Request::get(&*uri).header("range", range.as_str()),
-                        FetchLocation::create(
-                            part_path.into(),
-                            Some(range_end - range_start),
-                            false,
-                        )
-                        .await?,
-                        to.clone(),
-                        &mut modified,
-                        extra.clone(),
-                    )
-                    .await;
-
-                    fetcher.send(|| (to, extra.clone(), FetchEvent::PartFetched(partn as u64)));
-
-                    result
+                let part_path = {
+                    let mut new_filename = filename.to_os_string();
+                    new_filename.push(&[".part", partn.numtoa_str(10, &mut buf)].concat());
+                    parent.join(new_filename)
                 };
 
-                tokio::spawn(ranged_fetch)
-                    .await
-                    .map_err(Error::TokioSpawn)?
-            }
-        })
-        // Ensure that only this many connections are happenning concurrently at a
-        // time
-        .buffered(concurrent as usize);
+                let fetcher = fetcher.clone();
+                let to = to_.clone();
+                let extra = extra.clone();
+
+                async move {
+                    let ranged_fetch = async move {
+                        let range = range::to_string(range_start, Some(range_end));
+
+                        fetcher.send(|| {
+                            (
+                                to.clone(),
+                                extra.clone(),
+                                FetchEvent::PartFetching(partn as u64),
+                            )
+                        });
+
+                        let result = crate::get(
+                            fetcher.clone(),
+                            Request::get(&*uri).header("range", range.as_str()),
+                            FetchLocation::create(
+                                part_path.into(),
+                                Some(range_end - range_start),
+                                false,
+                            )
+                            .await?,
+                            to.clone(),
+                            &mut modified,
+                            extra.clone(),
+                        )
+                        .await;
+
+                        fetcher.send(|| (to, extra.clone(), FetchEvent::PartFetched(partn as u64)));
+
+                        result
+                    };
+
+                    tokio::spawn(ranged_fetch)
+                        .await
+                        .map_err(Error::TokioSpawn)?
+                }
+            })
+            // Ensure that only this many connections are happenning concurrently at a
+            // time
+            .buffered(concurrent_fetches);
 
     concatenator(file, parts).await?;
 

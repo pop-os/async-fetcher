@@ -13,15 +13,15 @@
 //! ```
 //! let results_stream = Fetcher::default()
 //!     // Define a max number of ranged connections per file.
-//!     .connections_per_file(NonZeroU16::try_from(4).ok())
+//!     .connections_per_file(4)
 //!     // Max size of a connection's part, concatenated on completion.
-//!     .max_part_size(NonZeroU32::try_from(4 * 1024 * 1024).unwrap())
+//!     .max_part_size(4 * 1024 * 1024)
 //!     // An `Arc<AtomicBool>` which can be used to interrupt the download.
 //!     .cancel(cancellable)
 //!     // The channel for sending progress notifications.
 //!     .events(events_tx)
 //!     // Maximum number of retry attempts.
-//!     .retries(NonZeroU16::try_from(3).unwrap())
+//!     .retries(3)
 //!     // How long to wait before aborting a download that hasn't progressed.
 //!     .timeout(Duration::from_secs(15))
 //!     // Finalize the struct into an `Arc` for use with fetching.
@@ -71,7 +71,6 @@ use std::{
     fmt::Debug,
     future::Future,
     io,
-    num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -164,16 +163,22 @@ pub struct Fetcher<Data> {
     cancel: Option<Arc<AtomicBool>>,
 
     /// The number of concurrent connections to sustain per file being fetched.
-    #[new(default)]
-    connections_per_file: Option<NonZeroU16>,
+    /// # Note
+    /// Defaults to 1 connection
+    #[new(value = "1")]
+    connections_per_file: u16,
 
     /// The number of attempts to make when a request fails.
-    #[new(value = "unsafe { NonZeroU16::new_unchecked(3) } ")]
-    retries: NonZeroU16,
+    /// # Note
+    /// Defaults to 3 retries.
+    #[new(value = "3")]
+    retries: u16,
 
     /// The maximum size of a part file when downloading in parts.
-    #[new(value = "unsafe { NonZeroU32::new_unchecked(2 * 1024 * 1024) }")]
-    max_part_size: NonZeroU32,
+    /// # Note
+    /// Defaults to 2 MiB.
+    #[new(value = "2 * 1024 * 1024")]
+    max_part_size: u32,
 
     /// The time to wait between chunks before giving up.
     #[new(default)]
@@ -256,23 +261,29 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         remove_parts(&to).await;
 
-        let result = match self
-            .clone()
-            .inner_request(uris.clone(), to.clone(), extra.clone())
-            .await
-        {
+        let fetch = || async {
+            self.clone()
+                .inner_request(uris.clone(), to.clone(), extra.clone())
+                .await
+        };
+
+        let mut attempts = 0;
+
+        let result = match fetch().await {
             Ok(()) => Ok(()),
             Err(mut why) => {
-                for nth in 1..self.retries.get() {
+                while attempts < self.retries {
+                    attempts += 1;
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
-                    let result = self
-                        .clone()
-                        .inner_request(uris.clone(), to.clone(), extra.clone())
-                        .await;
+                    match fetch().await {
+                        Ok(()) => {
+                            remove_parts(&to).await;
 
-                    match result {
-                        Ok(()) => return Ok(()),
+                            self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
+                            return Ok(());
+                        }
+
                         Err(cause) => why = cause,
                     }
                 }
@@ -339,7 +350,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         }
 
         // If set, this will use multiple connections to download a file in parts.
-        if let Some(connections) = self.connections_per_file {
+        if self.connections_per_file > 1 {
             if let Some(length) = length {
                 if supports_range(&self.client, &*uris[0], resume, Some(length)).await? {
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::ContentLength(length)));
@@ -354,7 +365,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         uris,
                         resume,
                         length,
-                        connections.get(),
                         modified,
                         extra,
                     )

@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use numtoa::NumToA;
-use std::num::NonZeroU64;
 
 pub fn generate(
     mut length: u64,
-    max_part_size: NonZeroU64,
+    max_part_size: u64,
     mut offset: u64,
 ) -> impl Iterator<Item = (u64, u64)> + Send + 'static {
     length -= offset;
@@ -17,10 +16,10 @@ pub fn generate(
         }
 
         let next;
-        if length > max_part_size.get() {
-            next = (offset, offset + max_part_size.get() - 1);
-            offset += max_part_size.get();
-            length -= max_part_size.get()
+        if length > max_part_size {
+            next = (offset, offset + max_part_size - 1);
+            offset += max_part_size;
+            length -= max_part_size
         } else {
             next = (offset, offset + length - 1);
             length = 0;
