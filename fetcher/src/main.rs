@@ -12,8 +12,6 @@ mod inputs;
 mod interactive;
 mod machine;
 
-use async_fetcher::checksum::Checksum;
-
 use async_fetcher::{Error as FetchError, *};
 use futures::prelude::*;
 use std::{
@@ -71,9 +69,7 @@ async fn fetcher_stream<
         // Finalize the fetcher so that it can perform fetch tasks.
         .build()
         // Build a stream that will perform fetches when polled.
-        .requests_stream(sources)
-        // Concurrently fetch up to 4 at a time
-        .buffer_unordered(4);
+        .stream_from(sources, 4);
 
     while let Some((dest, checksum, result)) = fetcher.next().await {
         match result {

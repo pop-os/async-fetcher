@@ -30,11 +30,13 @@ impl Source {
         }
     }
 
+    /// Sets the partial destination of a source.
     pub fn set_part(&mut self, part: Option<Arc<Path>>) {
         self.part = part;
     }
 }
 
+/// Constructs a `Source`.
 pub struct SourceBuilder {
     urls: Vec<Box<str>>,
     dest: Arc<Path>,
@@ -50,11 +52,13 @@ impl SourceBuilder {
         }
     }
 
+    /// A mirror where the source can be located.
     pub fn append_url(mut self, url: Box<str>) -> Self {
         self.urls.push(url);
         self
     }
 
+    /// A partial destination for a source.
     pub fn partial(mut self, part: Arc<Path>) -> Self {
         self.part = Some(part);
         self

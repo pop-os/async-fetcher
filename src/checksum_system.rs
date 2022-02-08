@@ -4,15 +4,7 @@
 use crate::checksum::{Checksum, ChecksumError};
 use futures::prelude::*;
 use remem::Pool;
-use std::{io, path::Path, sync::Arc};
-
-#[derive(Debug, Error)]
-pub enum ChecksummerError {
-    #[error("checksum is invalid")]
-    Checksum(#[source] ChecksumError),
-    #[error("failed to open source for checksum validation")]
-    Open(#[source] io::Error),
-}
+use std::{path::Path, sync::Arc};
 
 /// Generates a stream of futures that validate checksums.
 ///
@@ -26,7 +18,7 @@ pub enum ChecksummerError {
 /// ```
 pub fn checksum_stream<I: Stream<Item = (Arc<Path>, Checksum)> + Send + Unpin + 'static>(
     inputs: I,
-) -> impl Stream<Item = impl Future<Output = (Arc<Path>, Result<(), ChecksummerError>)>> {
+) -> impl Stream<Item = impl Future<Output = (Arc<Path>, Result<(), ChecksumError>)>> {
     let buffer_pool = Pool::new(|| Box::new([0u8; 8 * 1024]));
 
     inputs.map(move |(dest, checksum)| {
@@ -49,13 +41,13 @@ pub fn validate_checksum(
     buf: &mut [u8],
     dest: &Path,
     checksum: &Checksum,
-) -> Result<(), ChecksummerError> {
+) -> Result<(), ChecksumError> {
     let error = match std::fs::File::open(&*dest) {
         Ok(file) => match checksum.validate(file, buf) {
             Ok(()) => return Ok(()),
-            Err(why) => ChecksummerError::Checksum(why),
+            Err(why) => why,
         },
-        Err(why) => ChecksummerError::Open(why),
+        Err(why) => ChecksumError::from(why),
     };
 
     let _ = std::fs::remove_file(&*dest);

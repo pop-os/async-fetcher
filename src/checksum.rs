@@ -8,12 +8,14 @@ use serde::Deserialize;
 use sha2::Sha256;
 use std::{convert::TryFrom, io};
 
+/// A checksum of a `Source` as a fixed-sized byte array.
 #[derive(Debug, Clone)]
 pub enum Checksum {
     Md5(GenericArray<u8, <Md5 as OutputSizeUser>::OutputSize>),
     Sha256(GenericArray<u8, <Sha256 as OutputSizeUser>::OutputSize>),
 }
 
+/// An error that can occur from a failed checksum validation.
 #[derive(Debug, Error)]
 pub enum ChecksumError {
     #[error("expected {}, found {}", hex::encode(_0), hex::encode(_1))]
@@ -22,11 +24,13 @@ pub enum ChecksumError {
     IO(#[from] io::Error),
 }
 
+/// The `&str` representation of a `Checksum`.
 pub enum SumStr<'a> {
     Md5(&'a str),
     Sha256(&'a str),
 }
 
+/// The `String` representation of a `Checksum`.
 #[derive(Deserialize)]
 pub enum SumStrBuf {
     Md5(String),

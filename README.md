@@ -6,10 +6,6 @@ If the process is terminated, the downloads can be resumed. Once fetched, checks
 
 The HTTP client used by the fetcher is `isahc`, which is a Rust binding to `libcurl`.
 
-## Example
-
-See the official [fetcher utility](./fetcher) for a comprehensive demonstration of the API.
-
 ## License
 
 Licensed under the [Mozilla Public License 2.0](https://choosealicense.com/licenses/mpl-2.0/). Permissions of this copyleft license are conditioned on making available source code of licensed files and modifications of those files under the same license (or in certain cases, one of the GNU licenses). Copyright and license notices must be preserved. Contributors provide an express grant of patent rights. However, a larger work using the licensed work may be distributed under different terms and without source code for files added in the larger work.

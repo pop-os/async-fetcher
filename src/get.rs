@@ -46,92 +46,86 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
     let request = request.body(()).expect("failed to build request");
 
-    let initial_response = if let Some(duration) = fetcher.timeout {
-        timed(
-            duration,
-            Box::pin(async {
-                fetcher
-                    .client
-                    .send_async(request)
-                    .await
-                    .map_err(Error::from)
-            }),
-        )
-        .await??
-    } else {
-        fetcher.client.send_async(request).await?
-    };
+    let fetcher_ = fetcher.clone();
+    let task = async move {
+        let initial_response = fetcher
+            .client
+            .send_async(request)
+            .await
+            .map_err(Error::from)?;
 
-    if initial_response.status() == StatusCode::NOT_MODIFIED {
-        return Ok(dest);
-    }
-
-    let response = &mut validate(initial_response)?;
-
-    if modified.is_none() {
-        *modified = response.last_modified();
-    }
-
-    let mut buffer = vec![0u8; 64 * 1024];
-    let mut read;
-    let mut read_total = 0;
-
-    let mut now = Instant::now();
-
-    let update_progress = |progress: usize| {
-        fetcher.send(|| {
-            (
-                final_destination.clone(),
-                extra.clone(),
-                FetchEvent::Progress(progress as u64),
-            )
-        });
-    };
-
-    loop {
-        if fetcher.cancelled() {
-            return Err(Error::Cancelled);
+        if initial_response.status() == StatusCode::NOT_MODIFIED {
+            return Ok::<(), crate::Error>(());
         }
 
-        read = {
-            let reader = async {
-                response
-                    .body_mut()
-                    .read(&mut buffer)
-                    .await
-                    .map_err(Error::Write)
-            };
+        let response = &mut validate(initial_response)?;
 
-            futures::pin_mut!(reader);
+        if modified.is_none() {
+            *modified = response.last_modified();
+        }
 
-            match fetcher.timeout {
-                Some(duration) => timed(duration, reader).await??,
-                None => reader.await?,
-            }
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut read;
+        let mut read_total = 0;
+
+        let mut now = Instant::now();
+
+        let update_progress = |progress: usize| {
+            fetcher.send(|| {
+                (
+                    final_destination.clone(),
+                    extra.clone(),
+                    FetchEvent::Progress(progress as u64),
+                )
+            });
         };
 
-        if read == 0 {
-            break;
-        } else {
-            file.write_all(&buffer[..read])
-                .await
-                .map_err(Error::Write)?;
+        let body = response.body_mut();
 
-            read_total += read;
-            if now.elapsed().as_millis() > 500 {
-                update_progress(read_total);
+        loop {
+            read = {
+                let reader = async { body.read(&mut buffer).await.map_err(Error::Write) };
 
-                now = Instant::now();
-                read_total = 0;
+                futures::pin_mut!(reader);
+
+                crate::utils::run_timed(fetcher.timeout, reader).await??
+            };
+
+            if fetcher.canceled() {
+                return Err(crate::Error::Canceled);
+            }
+
+            if read == 0 {
+                break;
+            } else {
+                file.write_all(&buffer[..read])
+                    .await
+                    .map_err(Error::Write)?;
+
+                read_total += read;
+                if now.elapsed().as_millis() > 500 {
+                    update_progress(read_total);
+
+                    now = Instant::now();
+                    read_total = 0;
+
+                    tokio::task::yield_now().await;
+                }
             }
         }
-    }
 
-    if read_total != 0 {
-        update_progress(read_total);
-    }
+        if read_total != 0 {
+            update_progress(read_total);
+        }
 
-    let _ = file.flush().await;
+        let _ = file.flush().await;
+
+        Ok(())
+    };
+
+    futures::pin_mut!(task);
+
+    crate::utils::run_cancelable(fetcher_.cancel.clone(), task).await??;
 
     Ok(dest)
 }

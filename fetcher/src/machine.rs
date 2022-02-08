@@ -3,7 +3,7 @@
 
 use crate::execute;
 
-use async_fetcher::{checksum::Checksum, checksum_stream, FetchEvent};
+use async_fetcher::{checksum_stream, Checksum, FetchEvent};
 use futures::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{

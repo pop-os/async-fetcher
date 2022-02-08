@@ -4,8 +4,6 @@ A command-line utility for massively-concurrent and efficient caching of files f
 
 ## Features
 
-> Some of these features are not yet complete.
-
 ### Fully asynchronous
 
 Designed from the ground up around an asynchronous paradigm

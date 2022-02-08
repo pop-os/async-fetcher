@@ -41,40 +41,34 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                 let extra = extra.clone();
 
                 async move {
-                    let ranged_fetch = async move {
-                        let range = range::to_string(range_start, Some(range_end));
+                    let range = range::to_string(range_start, Some(range_end));
 
-                        fetcher.send(|| {
-                            (
-                                to.clone(),
-                                extra.clone(),
-                                FetchEvent::PartFetching(partn as u64),
-                            )
-                        });
-
-                        let result = crate::get(
-                            fetcher.clone(),
-                            Request::get(&*uri).header("range", range.as_str()),
-                            FetchLocation::create(
-                                part_path.into(),
-                                Some(range_end - range_start),
-                                false,
-                            )
-                            .await?,
+                    fetcher.send(|| {
+                        (
                             to.clone(),
-                            &mut modified,
                             extra.clone(),
+                            FetchEvent::PartFetching(partn as u64),
                         )
-                        .await;
+                    });
 
-                        fetcher.send(|| (to, extra.clone(), FetchEvent::PartFetched(partn as u64)));
+                    let result = crate::get(
+                        fetcher.clone(),
+                        Request::get(&*uri).header("range", range.as_str()),
+                        FetchLocation::create(
+                            part_path.into(),
+                            Some(range_end - range_start),
+                            false,
+                        )
+                        .await?,
+                        to.clone(),
+                        &mut modified,
+                        extra.clone(),
+                    )
+                    .await;
 
-                        result
-                    };
+                    fetcher.send(|| (to, extra.clone(), FetchEvent::PartFetched(partn as u64)));
 
-                    tokio::spawn(ranged_fetch)
-                        .await
-                        .map_err(Error::TokioSpawn)?
+                    result
                 }
             })
             // Ensure that only this many connections are happenning concurrently at a

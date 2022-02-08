@@ -27,9 +27,8 @@
 //!     // Finalize the struct into an `Arc` for use with fetching.
 //!     .build()
 //!     // Take a stream of `Source` inputs and generate a stream of fetches.
-//!     .requests_stream(input_stream)
-//!     // Fetches up to 8 sources concurrently
-//!     .buffered(8);
+//!     // Spawns
+//!     .stream_from(input_stream, 4)
 //! ```
 
 #[macro_use]
@@ -41,7 +40,7 @@ extern crate log;
 #[macro_use]
 extern crate thiserror;
 
-pub mod checksum;
+mod checksum;
 mod checksum_system;
 mod concatenator;
 mod get;
@@ -49,7 +48,9 @@ mod get_many;
 mod range;
 mod source;
 mod time;
+mod utils;
 
+pub use self::checksum::*;
 pub use self::checksum_system::*;
 pub use self::concatenator::*;
 pub use self::source::*;
@@ -69,7 +70,6 @@ use isahc::{AsyncBody, HttpClient as Client, Request, Response};
 use numtoa::NumToA;
 use std::{
     fmt::Debug,
-    future::Future,
     io,
     path::Path,
     sync::{
@@ -81,14 +81,17 @@ use std::{
 use tokio::fs;
 use tokio::sync::mpsc;
 
+/// The result of a fetched task from a stream of input sources.
+pub type AsyncFetchOutput<Data> = (Arc<Path>, Arc<Data>, Result<(), Error>);
+
+/// A channel for sending `FetchEvent`s to.
 pub type EventSender<Data> = mpsc::UnboundedSender<(Arc<Path>, Data, FetchEvent)>;
-pub type Output<T> = (Arc<Path>, Result<T, Error>);
 
 /// An error from the asynchronous file fetcher.
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("task was cancelled")]
-    Cancelled,
+    #[error("task was canceled")]
+    Canceled,
     #[error("http client error")]
     Client(isahc::Error),
     #[error("unable to concatenate fetched parts")]
@@ -210,41 +213,61 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         Arc::new(self)
     }
 
-    /// Build a stream that will perform fetches when polled.
-    pub fn requests_stream(
+    /// Given an input stream of source fetches, returns an output stream of fetch results.
+    ///
+    /// Spawns up to `concurrent` + `1` number of concurrent async tasks on the runtime.
+    /// One task for managing the fetch tasks, and one task per fetch request.
+    pub fn stream_from(
         self: Arc<Self>,
-        inputs: impl Stream<Item = (Source, Arc<Data>)> + Unpin + Send + 'static,
-    ) -> impl Stream<
-        Item = impl Future<Output = (Arc<Path>, Arc<Data>, Result<(), Error>)> + Send + 'static,
-    > + Send
-           + Unpin
-           + 'static {
-        inputs.map(move |(source, extra)| {
-            let fetcher = self.clone();
+        mut inputs: impl Stream<Item = (Source, Arc<Data>)> + Unpin + Send + 'static,
+        concurrent: usize,
+    ) -> impl Stream<Item = AsyncFetchOutput<Data>> + Send + Unpin + 'static {
+        let (tx, rx) = tokio::sync::mpsc::channel(concurrent);
 
-            async move {
-                let Source { dest, urls, part } = source;
+        tokio::spawn(async move {
+            let semaphore = tokio::sync::Semaphore::new(concurrent);
 
-                let result = match part {
-                    Some(part) => match fetcher
-                        .clone()
-                        .request(urls, part.clone(), extra.clone())
-                        .await
-                    {
-                        Ok(()) => fs::rename(&*part, &*dest).await.map_err(Error::Rename),
-                        Err(why) => Err(why),
-                    },
-                    None => {
-                        fetcher
+            while let Some((source, extra)) = inputs.next().await {
+                if self.canceled() {
+                    return;
+                }
+
+                let permit = semaphore.acquire().await;
+
+                if permit.is_err() {
+                    error!("failed to acquire permit for request stream");
+                    break;
+                }
+
+                let fetcher = self.clone();
+                let tx = tx.clone();
+
+                tokio::spawn(async move {
+                    let Source { dest, urls, part } = source;
+
+                    let result = match part {
+                        Some(part) => match fetcher
                             .clone()
-                            .request(urls, dest.clone(), extra.clone())
+                            .request(urls, part.clone(), extra.clone())
                             .await
-                    }
-                };
+                        {
+                            Ok(()) => fs::rename(&*part, &*dest).await.map_err(Error::Rename),
+                            Err(why) => Err(why),
+                        },
+                        None => {
+                            fetcher
+                                .clone()
+                                .request(urls, dest.clone(), extra.clone())
+                                .await
+                        }
+                    };
 
-                (dest, extra, result)
+                    let _ = tx.send((dest, extra, result)).await;
+                });
             }
-        })
+        });
+
+        tokio_stream::wrappers::ReceiverStream::new(rx)
     }
 
     /// Request a file from one or more URIs.
@@ -262,9 +285,13 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         remove_parts(&to).await;
 
         let fetch = || async {
-            self.clone()
-                .inner_request(uris.clone(), to.clone(), extra.clone())
-                .await
+            let fetch = self
+                .clone()
+                .inner_request(uris.clone(), to.clone(), extra.clone());
+
+            futures::pin_mut!(fetch);
+
+            crate::utils::run_cancelable(self.cancel.clone(), fetch).await?
         };
 
         let cleanup = || async {
@@ -281,9 +308,9 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 while attempts < self.retries {
                     attempts += 1;
 
-                    if self.cancelled() {
+                    if self.canceled() {
                         cleanup().await;
-                        return Err(Error::Cancelled);
+                        return Err(Error::Canceled);
                     }
 
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
@@ -444,7 +471,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         Ok(())
     }
 
-    fn cancelled(&self) -> bool {
+    fn canceled(&self) -> bool {
         self.cancel
             .as_ref()
             .map_or(false, |cancel| cancel.load(Ordering::SeqCst))
@@ -457,7 +484,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     }
 }
 
-pub async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBody>>, Error> {
+async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBody>>, Error> {
     let request = Request::head(uri).body(()).unwrap();
 
     match validate(client.send_async(request).await?).map(Some) {
@@ -468,7 +495,7 @@ pub async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBod
     }
 }
 
-pub async fn supports_range(
+async fn supports_range(
     client: &Client,
     uri: &str,
     resume: u64,
@@ -494,26 +521,6 @@ pub async fn supports_range(
     } else {
         validate(response).map(|_| false)
     }
-}
-
-pub async fn timed<F, T>(duration: Duration, future: F) -> Result<T, Error>
-where
-    F: Future<Output = T> + Unpin,
-{
-    let timeout = async move {
-        tokio::time::sleep(duration).await;
-        Err(Error::TimedOut)
-    };
-
-    let result = async move { Ok(future.await) };
-
-    futures::pin_mut!(timeout);
-    futures::pin_mut!(result);
-
-    futures::future::select(timeout, result)
-        .await
-        .factor_first()
-        .0
 }
 
 fn validate(response: Response<AsyncBody>) -> Result<Response<AsyncBody>, Error> {
