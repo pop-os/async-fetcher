@@ -267,6 +267,12 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 .await
         };
 
+        let cleanup = || async {
+            remove_parts(&to).await;
+
+            self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
+        };
+
         let mut attempts = 0;
 
         let result = match fetch().await {
@@ -274,13 +280,17 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             Err(mut why) => {
                 while attempts < self.retries {
                     attempts += 1;
+
+                    if self.cancelled() {
+                        cleanup().await;
+                        return Err(Error::Cancelled);
+                    }
+
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
                     match fetch().await {
                         Ok(()) => {
-                            remove_parts(&to).await;
-
-                            self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
+                            cleanup().await;
                             return Ok(());
                         }
 
@@ -292,9 +302,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             }
         };
 
-        remove_parts(&to).await;
-
-        self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
+        cleanup().await;
 
         result
     }
