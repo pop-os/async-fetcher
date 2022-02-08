@@ -339,6 +339,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                                 self.send(|| (to, extra.clone(), FetchEvent::AlreadyFetched));
                                 return Ok(());
                             } else {
+                                error!("removing file with outdated timestamp: {:?}", to);
                                 let _ = fs::remove_file(to.as_ref())
                                     .await
                                     .map_err(Error::MetadataRemove)?;
