@@ -196,7 +196,6 @@ impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
         Self::new(
             Client::builder()
-                .low_speed_timeout(1, std::time::Duration::from_secs(15))
                 .redirect_policy(isahc::config::RedirectPolicy::Follow)
                 .build()
                 .expect("failed to build HTTP client"),
