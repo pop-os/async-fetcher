@@ -13,12 +13,12 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     mut modified: Option<HttpDate>,
     extra: Arc<Data>,
 ) -> Result<(), Error> {
-    let parent = to.parent().ok_or(Error::Parentless)?;
-    let filename = to.file_name().ok_or(Error::Nameless)?;
+    let parent = to.parent().ok_or(Error::Parentless)?.to_owned();
+    let filename = to.file_name().ok_or(Error::Nameless)?.to_owned();
 
     let mut buf = [0u8; 20];
 
-    let FetchLocation { ref mut file, .. } =
+    let FetchLocation { mut file, .. } =
         FetchLocation::create(to.clone(), None, offset != 0).await?;
 
     let concurrent_fetches = fetcher.connections_per_file as usize;
@@ -75,7 +75,10 @@ pub async fn get_many<Data: Send + Sync + 'static>(
             // time
             .buffered(concurrent_fetches);
 
-    concatenator(file, parts).await?;
+    let concatenation_task =
+        tokio::spawn(async move { concatenator(&mut file, parts).await }).await;
+
+    concatenation_task.map_err(crate::Error::TokioSpawn)??;
 
     if let Some(modified) = modified {
         crate::time::update_modified(&to, modified)?;
