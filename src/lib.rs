@@ -16,7 +16,7 @@
 //!     .connections_per_file(4)
 //!     // Max size of a connection's part, concatenated on completion.
 //!     .max_part_size(4 * 1024 * 1024)
-//!     // An `Arc<AtomicBool>` which can be used to interrupt the download.
+//!     // A `tokio::sync::Notify` which can be used to interrupt a download.
 //!     .cancel(cancellable)
 //!     // The channel for sending progress notifications.
 //!     .events(events_tx)
@@ -72,14 +72,11 @@ use std::{
     fmt::Debug,
     io,
     path::Path,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
 use tokio::fs;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 /// The result of a fetched task from a stream of input sources.
 pub type AsyncFetchOutput<Data> = (Arc<Path>, Arc<Data>, Result<(), Error>);
@@ -163,7 +160,7 @@ pub struct Fetcher<Data> {
     /// When set, cancels any active operations.
     #[new(default)]
     #[setters(strip_option)]
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<Arc<Notify>>,
 
     /// The number of concurrent connections to sustain per file being fetched.
     /// # Note
@@ -227,44 +224,53 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         tokio::spawn(async move {
             let semaphore = tokio::sync::Semaphore::new(concurrent);
 
-            while let Some((source, extra)) = inputs.next().await {
-                if self.canceled() {
-                    return;
-                }
+            let fetcher = self.clone();
+            let _ = self
+                .cancel_watch(async {
+                    while let Some((source, extra)) = inputs.next().await {
+                        let permit = semaphore.acquire().await;
 
-                let permit = semaphore.acquire().await;
-
-                if permit.is_err() {
-                    error!("failed to acquire permit for request stream");
-                    break;
-                }
-
-                let fetcher = self.clone();
-                let tx = tx.clone();
-
-                tokio::spawn(async move {
-                    let Source { dest, urls, part } = source;
-
-                    let result = match part {
-                        Some(part) => match fetcher
-                            .clone()
-                            .request(urls, part.clone(), extra.clone())
-                            .await
-                        {
-                            Ok(()) => fs::rename(&*part, &*dest).await.map_err(Error::Rename),
-                            Err(why) => Err(why),
-                        },
-                        None => {
-                            fetcher
-                                .clone()
-                                .request(urls, dest.clone(), extra.clone())
-                                .await
+                        if permit.is_err() {
+                            error!("failed to acquire permit for request stream");
+                            break;
                         }
-                    };
 
-                    let _ = tx.send((dest, extra, result)).await;
-                });
-            }
+                        let tx = tx.clone();
+
+                        let fetcher = fetcher.clone();
+                        tokio::spawn(async move {
+                            let fetcher2 = fetcher.clone();
+                            let _ = fetcher
+                                .cancel_watch(async move {
+                                    let Source { dest, urls, part } = source;
+
+                                    let result = match part {
+                                        Some(part) => match fetcher2
+                                            .request(urls, part.clone(), extra.clone())
+                                            .await
+                                        {
+                                            Ok(()) => fs::rename(&*part, &*dest)
+                                                .await
+                                                .map_err(Error::Rename),
+                                            Err(why) => Err(why),
+                                        },
+                                        None => {
+                                            fetcher2
+                                                .request(urls, dest.clone(), extra.clone())
+                                                .await
+                                        }
+                                    };
+
+                                    let _ = tx.send((dest, extra, result)).await;
+                                    Ok(())
+                                })
+                                .await;
+                        });
+                    }
+
+                    Ok(())
+                })
+                .await;
         });
 
         tokio_stream::wrappers::ReceiverStream::new(rx)
@@ -285,13 +291,9 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         remove_parts(&to).await;
 
         let fetch = || async {
-            let fetch = self
-                .clone()
-                .inner_request(uris.clone(), to.clone(), extra.clone());
-
-            futures::pin_mut!(fetch);
-
-            crate::utils::run_cancelable(self.cancel.clone(), fetch).await?
+            self.clone()
+                .inner_request(uris.clone(), to.clone(), extra.clone())
+                .await
         };
 
         let cleanup = || async {
@@ -300,34 +302,27 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
         };
 
-        let mut attempts = 0;
+        let result = self
+            .cancel_watch(async {
+                let mut attempts = 0;
 
-        let result = match fetch().await {
-            Ok(()) => Ok(()),
-            Err(mut why) => {
-                while attempts < self.retries {
-                    attempts += 1;
+                if let Err(mut why) = fetch().await {
+                    while attempts < self.retries {
+                        attempts += 1;
 
-                    if self.canceled() {
-                        cleanup().await;
-                        return Err(Error::Canceled);
-                    }
+                        self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
-                    self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
-
-                    match fetch().await {
-                        Ok(()) => {
-                            cleanup().await;
-                            return Ok(());
+                        if let Err(source) = fetch().await {
+                            why = source;
                         }
-
-                        Err(cause) => why = cause,
                     }
-                }
 
-                Err(why)
-            }
-        };
+                    return Err(why);
+                };
+
+                Ok(())
+            })
+            .await;
 
         cleanup().await;
 
@@ -471,10 +466,26 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         Ok(())
     }
 
-    fn canceled(&self) -> bool {
-        self.cancel
-            .as_ref()
-            .map_or(false, |cancel| cancel.load(Ordering::SeqCst))
+    async fn cancel_watch<F: Future<Output = Result<(), crate::Error>>>(
+        self: &Arc<Self>,
+        future: F,
+    ) -> Result<(), crate::Error> {
+        match self.cancel.as_ref() {
+            Some(cancel_notifier) => {
+                let canceled = cancel_notifier.notified();
+
+                futures::pin_mut!(future);
+                futures::pin_mut!(canceled);
+
+                use futures::future::Either;
+
+                match futures::future::select(canceled, future).await {
+                    Either::Left((_, _)) => Err(crate::Error::Canceled),
+                    Either::Right((result, _)) => result,
+                }
+            }
+            None => future.await,
+        }
     }
 
     fn send(&self, event: impl FnOnce() -> (Arc<Path>, Arc<Data>, FetchEvent)) {

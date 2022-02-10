@@ -46,7 +46,6 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
     let request = request.body(()).expect("failed to build request");
 
-    let fetcher_ = fetcher.clone();
     let task = async move {
         let initial_response = fetcher
             .client
@@ -91,10 +90,6 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                 crate::utils::run_timed(fetcher.timeout, reader).await??
             };
 
-            if fetcher.canceled() {
-                return Err(crate::Error::Canceled);
-            }
-
             if read == 0 {
                 break;
             } else {
@@ -123,9 +118,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         Ok(())
     };
 
-    futures::pin_mut!(task);
-
-    crate::utils::run_cancelable(fetcher_.cancel.clone(), task).await??;
+    task.await?;
 
     Ok(dest)
 }
