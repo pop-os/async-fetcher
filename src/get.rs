@@ -40,7 +40,6 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     request: http::request::Builder,
     file: FetchLocation,
     final_destination: Arc<Path>,
-    modified: &mut Option<HttpDate>,
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<Arc<Path>, crate::Error> {
@@ -56,14 +55,10 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             .map_err(Error::from)?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
-            return Ok::<(), crate::Error>(());
+            return Ok::<_, crate::Error>(());
         }
 
         let response = &mut validate(initial_response)?;
-
-        if modified.is_none() {
-            *modified = response.last_modified();
-        }
 
         let mut buffer = vec![0u8; 16 * 1024];
         let mut read;

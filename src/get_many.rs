@@ -11,7 +11,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     uris: Arc<[Box<str>]>,
     offset: u64,
     length: u64,
-    mut modified: Option<HttpDate>,
+    modified: Option<HttpDate>,
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<(), Error> {
@@ -54,17 +54,18 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                         )
                     });
 
+                    let part_path: Arc<Path> = Arc::from(part_path);
+
                     let result = crate::get(
                         fetcher.clone(),
                         Request::get(&*uri).header("range", range.as_str()),
                         FetchLocation::create(
-                            part_path.into(),
+                            part_path.clone(),
                             Some(range_end - range_start),
                             false,
                         )
                         .await?,
                         to.clone(),
-                        &mut modified,
                         extra.clone(),
                         attempts.clone(),
                     )
@@ -79,10 +80,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
             // time
             .buffered(concurrent_fetches);
 
-    let concatenation_task =
-        tokio::spawn(async move { concatenator(&mut file, parts).await }).await;
-
-    concatenation_task.map_err(crate::Error::TokioSpawn)??;
+    concatenator(&mut file, parts).await?;
 
     if let Some(modified) = modified {
         crate::time::update_modified(&to, modified)?;

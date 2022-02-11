@@ -40,6 +40,8 @@ extern crate log;
 #[macro_use]
 extern crate thiserror;
 
+pub mod iface;
+
 mod checksum;
 mod checksum_system;
 mod concatenator;
@@ -104,6 +106,8 @@ pub enum Error {
     MetadataRemove(#[source] io::Error),
     #[error("destination has no file name")]
     Nameless,
+    #[error("network connection was interrupted while fetching")]
+    NetworkChanged,
     #[error("unable to open fetched part")]
     OpenPart(Arc<Path>, #[source] io::Error),
     #[error("destination lacks parent")]
@@ -293,15 +297,42 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let attempts = Arc::new(AtomicU16::new(0));
 
         let fetch = || async {
-            self.clone()
-                .inner_request(uris.clone(), to.clone(), extra.clone(), attempts.clone())
-                .await
+            loop {
+                let task = self.clone().inner_request(
+                    uris.clone(),
+                    to.clone(),
+                    extra.clone(),
+                    attempts.clone(),
+                );
+
+                let result = crate::utils::network_interrupt(task).await;
+
+                if let Err(Error::NetworkChanged) = result {
+                    debug!("network connection changed");
+                    let mut attempts = 5;
+                    while attempts != 0 {
+                        debug!("checking for online connection");
+                        let net_check = head(&self.client, &uris[0]);
+                        if crate::utils::network_interrupt(net_check).await.is_err() {
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                        } else {
+                            break;
+                        }
+
+                        attempts -= 1;
+                    }
+
+                    self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
+
+                    continue;
+                }
+
+                return result;
+            }
         };
 
         let cleanup = || async {
             remove_parts(&to).await;
-
-            self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
         };
 
         let result = self
@@ -323,6 +354,10 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             .await;
 
         cleanup().await;
+
+        if result.is_ok() {
+            self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
+        }
 
         result
     }
@@ -433,7 +468,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             request,
             FetchLocation::create(to.clone(), length, resume != 0).await?,
             to.clone(),
-            &mut modified,
             extra.clone(),
             attempts.clone(),
         )
@@ -451,7 +485,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     request,
                     FetchLocation::create(to.clone(), length, resume != 0).await?,
                     to.clone(),
-                    &mut modified,
                     extra.clone(),
                     attempts,
                 )

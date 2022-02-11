@@ -27,3 +27,17 @@ where
 
     select(timeout, result).await.factor_first().0
 }
+
+pub async fn network_interrupt<T>(
+    future: impl Future<Output = Result<T, Error>>,
+) -> Result<T, Error> {
+    let ifaces_changed = async {
+        crate::iface::watch_change().await;
+        Err(Error::NetworkChanged)
+    };
+
+    futures::pin_mut!(ifaces_changed);
+    futures::pin_mut!(future);
+
+    select(ifaces_changed, future).await.factor_first().0
+}
