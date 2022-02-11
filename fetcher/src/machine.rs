@@ -65,8 +65,6 @@ pub async fn run(
                     state.remove(&dest);
                     Output(fomat!((dest.display())), OutputEvent::Retrying)
                 }
-
-                _ => continue,
             };
 
             if events_tx_.send(event).await.is_err() {

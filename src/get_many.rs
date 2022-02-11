@@ -46,17 +46,9 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                 async move {
                     let range = range::to_string(range_start, Some(range_end));
 
-                    fetcher.send(|| {
-                        (
-                            to.clone(),
-                            extra.clone(),
-                            FetchEvent::PartFetching(partn as u64),
-                        )
-                    });
-
                     let part_path: Arc<Path> = Arc::from(part_path);
 
-                    let result = crate::get(
+                    crate::get(
                         fetcher.clone(),
                         Request::get(&*uri).header("range", range.as_str()),
                         FetchLocation::create(
@@ -69,11 +61,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                         extra.clone(),
                         attempts.clone(),
                     )
-                    .await;
-
-                    fetcher.send(|| (to, extra.clone(), FetchEvent::PartFetched(partn as u64)));
-
-                    result
+                    .await
                 }
             })
             // Ensure that only this many connections are happenning concurrently at a

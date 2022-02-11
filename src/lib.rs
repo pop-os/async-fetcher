@@ -143,10 +143,6 @@ pub enum FetchEvent {
     Fetching,
     /// Reports the amount of bytes that have been read for a file.
     Progress(u64),
-    /// Reports that a part of a file is being fetched.
-    PartFetching(u64),
-    /// Reports that a part has been fetched.
-    PartFetched(u64),
     /// Notification that a fetch is being re-attempted.
     Retrying,
 }
