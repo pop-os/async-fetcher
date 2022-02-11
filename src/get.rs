@@ -3,6 +3,7 @@
 
 use super::*;
 use std::path::Path;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
@@ -41,6 +42,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     final_destination: Arc<Path>,
     modified: &mut Option<HttpDate>,
     extra: Arc<Data>,
+    attempts: Arc<AtomicU16>,
 ) -> Result<Arc<Path>, crate::Error> {
     let FetchLocation { mut file, dest } = file;
 
@@ -63,7 +65,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             *modified = response.last_modified();
         }
 
-        let mut buffer = vec![0u8; 64 * 1024];
+        let mut buffer = vec![0u8; 16 * 1024];
         let mut read;
         let mut read_total = 0;
 
@@ -107,6 +109,8 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                     tokio::task::yield_now().await;
                 }
             }
+
+            attempts.store(0, Ordering::SeqCst);
         }
 
         if read_total != 0 {

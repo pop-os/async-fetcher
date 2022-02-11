@@ -68,11 +68,12 @@ use httpdate::HttpDate;
 use isahc::config::Configurable;
 use isahc::{AsyncBody, HttpClient as Client, Request, Response};
 use numtoa::NumToA;
+use std::sync::atomic::Ordering;
 use std::{
     fmt::Debug,
     io,
     path::Path,
-    sync::Arc,
+    sync::{atomic::AtomicU16, Arc},
     time::{Duration, UNIX_EPOCH},
 };
 use tokio::fs;
@@ -289,9 +290,11 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         remove_parts(&to).await;
 
+        let attempts = Arc::new(AtomicU16::new(0));
+
         let fetch = || async {
             self.clone()
-                .inner_request(uris.clone(), to.clone(), extra.clone())
+                .inner_request(uris.clone(), to.clone(), extra.clone(), attempts.clone())
                 .await
         };
 
@@ -303,12 +306,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         let result = self
             .cancel_watch(async {
-                let mut attempts = 0;
-
                 if let Err(mut why) = fetch().await {
-                    while attempts < self.retries {
-                        attempts += 1;
-
+                    while attempts.fetch_add(1, Ordering::SeqCst) < self.retries {
                         self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
                         if let Err(source) = fetch().await {
@@ -333,6 +332,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         extra: Arc<Data>,
+        attempts: Arc<AtomicU16>,
     ) -> Result<(), Error> {
         let mut length = None;
         let mut modified = None;
@@ -397,6 +397,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         length,
                         modified,
                         extra,
+                        attempts.clone(),
                     )
                     .await?;
 
@@ -434,6 +435,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             to.clone(),
             &mut modified,
             extra.clone(),
+            attempts.clone(),
         )
         .await
         {
@@ -451,6 +453,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     to.clone(),
                     &mut modified,
                     extra.clone(),
+                    attempts,
                 )
                 .await?
             }

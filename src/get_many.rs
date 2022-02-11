@@ -3,6 +3,7 @@
 
 use crate::get::FetchLocation;
 use crate::*;
+use std::sync::atomic::AtomicU16;
 
 pub async fn get_many<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
@@ -12,6 +13,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     length: u64,
     mut modified: Option<HttpDate>,
     extra: Arc<Data>,
+    attempts: Arc<AtomicU16>,
 ) -> Result<(), Error> {
     let parent = to.parent().ok_or(Error::Parentless)?.to_owned();
     let filename = to.file_name().ok_or(Error::Nameless)?.to_owned();
@@ -39,6 +41,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                 let fetcher = fetcher.clone();
                 let to = to_.clone();
                 let extra = extra.clone();
+                let attempts = attempts.clone();
 
                 async move {
                     let range = range::to_string(range_start, Some(range_end));
@@ -63,6 +66,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                         to.clone(),
                         &mut modified,
                         extra.clone(),
+                        attempts.clone(),
                     )
                     .await;
 
