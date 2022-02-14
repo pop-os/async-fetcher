@@ -23,7 +23,7 @@ where
     }
     .await;
 
-    let _ = dest.flush().await;
+    let _ = dest.shutdown().await;
 
     result
 }

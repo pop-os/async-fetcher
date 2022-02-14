@@ -16,8 +16,6 @@
 //!     .connections_per_file(4)
 //!     // Max size of a connection's part, concatenated on completion.
 //!     .max_part_size(4 * 1024 * 1024)
-//!     // A `tokio::sync::Notify` which can be used to interrupt a download.
-//!     .cancel(cancellable)
 //!     // The channel for sending progress notifications.
 //!     .events(events_tx)
 //!     // Maximum number of retry attempts.
@@ -60,7 +58,7 @@ pub use self::source::*;
 use self::get::{get, FetchLocation};
 use self::get_many::get_many;
 use self::time::{date_as_timestamp, update_modified};
-
+use async_shutdown::Shutdown;
 use futures::{
     prelude::*,
     stream::{self, StreamExt},
@@ -79,7 +77,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 use tokio::fs;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::mpsc;
 
 /// The result of a fetched task from a stream of input sources.
 pub type AsyncFetchOutput<Data> = (Arc<Path>, Arc<Data>, Result<(), Error>);
@@ -158,11 +156,6 @@ pub struct Fetcher<Data> {
     #[setters(skip)]
     client: Client,
 
-    /// When set, cancels any active operations.
-    #[new(default)]
-    #[setters(strip_option)]
-    cancel: Option<Arc<Notify>>,
-
     /// The number of concurrent connections to sustain per file being fetched.
     /// # Note
     /// Defaults to 1 connection
@@ -216,64 +209,48 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     /// One task for managing the fetch tasks, and one task per fetch request.
     pub fn stream_from(
         self: Arc<Self>,
-        mut inputs: impl Stream<Item = (Source, Arc<Data>)> + Unpin + Send + 'static,
+        shutdown: Shutdown,
+        inputs: impl Stream<Item = (Source, Arc<Data>)> + Send + 'static,
         concurrent: usize,
-    ) -> impl Stream<Item = AsyncFetchOutput<Data>> + Send + Unpin + 'static {
-        let (tx, rx) = tokio::sync::mpsc::channel(concurrent);
+    ) -> impl Stream<Item = AsyncFetchOutput<Data>> + Send + 'static {
+        let cancel_trigger = shutdown.wait_shutdown_triggered();
 
-        tokio::spawn(async move {
-            let semaphore = tokio::sync::Semaphore::new(concurrent);
+        // Takes input requests and converts them into a stream of fetch requests.
+        inputs
+            .map(move |(Source { dest, urls, part }, extra)| {
+                let shutdown = shutdown.clone();
+                let fetcher = self.clone();
+                async move {
+                    tokio::spawn(async move {
+                        let task = async {
+                            match part {
+                                Some(part) => match fetcher
+                                    .request(&shutdown, urls, part.clone(), extra.clone())
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        fs::rename(&*part, &*dest).await.map_err(Error::Rename)
+                                    }
+                                    Err(why) => Err(why),
+                                },
+                                None => {
+                                    fetcher
+                                        .request(&shutdown, urls, dest.clone(), extra.clone())
+                                        .await
+                                }
+                            }
+                        };
 
-            let fetcher = self.clone();
-            let _ = self
-                .cancel_watch(async {
-                    while let Some((source, extra)) = inputs.next().await {
-                        let permit = semaphore.acquire().await;
+                        let result = crate::utils::shutdown_cancel(&shutdown, task).await;
 
-                        if permit.is_err() {
-                            error!("failed to acquire permit for request stream");
-                            break;
-                        }
-
-                        let tx = tx.clone();
-
-                        let fetcher = fetcher.clone();
-                        tokio::spawn(async move {
-                            let fetcher2 = fetcher.clone();
-                            let _ = fetcher
-                                .cancel_watch(async move {
-                                    let Source { dest, urls, part } = source;
-
-                                    let result = match part {
-                                        Some(part) => match fetcher2
-                                            .request(urls, part.clone(), extra.clone())
-                                            .await
-                                        {
-                                            Ok(()) => fs::rename(&*part, &*dest)
-                                                .await
-                                                .map_err(Error::Rename),
-                                            Err(why) => Err(why),
-                                        },
-                                        None => {
-                                            fetcher2
-                                                .request(urls, dest.clone(), extra.clone())
-                                                .await
-                                        }
-                                    };
-
-                                    let _ = tx.send((dest, extra, result)).await;
-                                    Ok(())
-                                })
-                                .await;
-                        });
-                    }
-
-                    Ok(())
-                })
-                .await;
-        });
-
-        tokio_stream::wrappers::ReceiverStream::new(rx)
+                        (dest, extra, result)
+                    })
+                    .await
+                    .unwrap()
+                }
+            })
+            .buffer_unordered(concurrent)
+            .take_until(cancel_trigger)
     }
 
     /// Request a file from one or more URIs.
@@ -282,6 +259,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     /// serves as a mirror for failover and load-balancing purposes.
     pub async fn request(
         self: Arc<Self>,
+        shutdown: &Shutdown,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         extra: Arc<Data>,
@@ -295,6 +273,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let fetch = || async {
             loop {
                 let task = self.clone().inner_request(
+                    shutdown,
                     uris.clone(),
                     to.clone(),
                     extra.clone(),
@@ -331,23 +310,23 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             remove_parts(&to).await;
         };
 
-        let result = self
-            .cancel_watch(async {
-                if let Err(mut why) = fetch().await {
-                    while attempts.fetch_add(1, Ordering::SeqCst) < self.retries {
-                        self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
+        let task = async {
+            if let Err(mut why) = fetch().await {
+                while attempts.fetch_add(1, Ordering::SeqCst) < self.retries {
+                    self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
-                        if let Err(source) = fetch().await {
-                            why = source;
-                        }
+                    if let Err(source) = fetch().await {
+                        why = source;
                     }
+                }
 
-                    return Err(why);
-                };
+                return Err(why);
+            };
 
-                Ok(())
-            })
-            .await;
+            Ok(())
+        };
+
+        let result = crate::utils::shutdown_cancel(shutdown, task).await;
 
         cleanup().await;
 
@@ -360,6 +339,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
     async fn inner_request(
         self: Arc<Self>,
+        shutdown: &Shutdown,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         extra: Arc<Data>,
@@ -422,6 +402,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                     get_many(
                         self.clone(),
+                        shutdown,
                         to.clone(),
                         uris,
                         resume,
@@ -461,6 +442,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         let path = match crate::get(
             self.clone(),
+            shutdown.clone(),
             request,
             FetchLocation::create(to.clone(), length, resume != 0).await?,
             to.clone(),
@@ -478,6 +460,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 let request = Request::get(&*uris[0]);
                 crate::get(
                     self.clone(),
+                    shutdown.clone(),
                     request,
                     FetchLocation::create(to.clone(), length, resume != 0).await?,
                     to.clone(),
@@ -495,28 +478,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         }
 
         Ok(())
-    }
-
-    async fn cancel_watch<F: Future<Output = Result<(), crate::Error>>>(
-        self: &Arc<Self>,
-        future: F,
-    ) -> Result<(), crate::Error> {
-        match self.cancel.as_ref() {
-            Some(cancel_notifier) => {
-                let canceled = cancel_notifier.notified();
-
-                futures::pin_mut!(future);
-                futures::pin_mut!(canceled);
-
-                use futures::future::Either;
-
-                match futures::future::select(canceled, future).await {
-                    Either::Left((_, _)) => Err(crate::Error::Canceled),
-                    Either::Right((result, _)) => result,
-                }
-            }
-            None => future.await,
-        }
     }
 
     fn send(&self, event: impl FnOnce() -> (Arc<Path>, Arc<Data>, FetchEvent)) {

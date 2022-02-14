@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicU16;
 
 pub async fn get_many<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
+    shutdown: &async_shutdown::Shutdown,
     to: Arc<Path>,
     uris: Arc<[Box<str>]>,
     offset: u64,
@@ -50,6 +51,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
                     crate::get(
                         fetcher.clone(),
+                        shutdown.clone(),
                         Request::get(&*uri).header("range", range.as_str()),
                         FetchLocation::create(
                             part_path.clone(),
@@ -66,7 +68,10 @@ pub async fn get_many<Data: Send + Sync + 'static>(
             })
             // Ensure that only this many connections are happenning concurrently at a
             // time
-            .buffered(concurrent_fetches);
+            .buffered(concurrent_fetches)
+            .take_until(shutdown.wait_shutdown_triggered());
+
+    let _shutdown_token = shutdown.delay_shutdown_token();
 
     concatenator(&mut file, parts).await?;
 

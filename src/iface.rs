@@ -1,5 +1,6 @@
 use std::{
     collections::hash_map::DefaultHasher,
+    future::Future,
     hash::{Hash, Hasher},
 };
 
@@ -25,6 +26,34 @@ pub async fn watch_change() {
         let new = state();
         if new != current {
             break;
+        }
+    }
+}
+
+/// Re-attempts a request on network changes.
+pub async fn reconnect_on_change<Func, Fut, Res, Retry, Cont>(func: Func, cont: Retry) -> Res
+where
+    Func: Fn() -> Fut,
+    Fut: Future<Output = Res>,
+    Retry: Fn() -> Cont,
+    Cont: Future<Output = Option<Res>>,
+{
+    loop {
+        let changed = watch_change();
+        let future = func();
+
+        futures::pin_mut!(future);
+        futures::pin_mut!(changed);
+
+        use futures::future::Either;
+
+        match futures::future::select(future, changed).await {
+            Either::Left((result, _)) => break result,
+            Either::Right(_) => {
+                if let Some(result) = cont().await {
+                    break result;
+                }
+            }
         }
     }
 }

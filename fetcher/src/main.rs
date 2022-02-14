@@ -13,7 +13,9 @@ mod interactive;
 mod machine;
 
 use async_fetcher::{Error as FetchError, *};
+use async_shutdown::Shutdown;
 use futures::prelude::*;
+use once_cell::sync::OnceCell;
 use std::{
     io,
     os::unix::io::{AsRawFd, FromRawFd},
@@ -23,6 +25,11 @@ use std::{
 };
 use tokio::fs::File;
 use tokio::sync::mpsc;
+
+fn shutdown_handle() -> &'static Shutdown {
+    static SHUTDOWN: OnceCell<Shutdown> = OnceCell::new();
+    SHUTDOWN.get_or_init(Shutdown::new)
+}
 
 #[tokio::main]
 async fn main() {
@@ -35,6 +42,8 @@ async fn main() {
     } else {
         machine::run(tx, rx).await
     }
+
+    shutdown_handle().wait_shutdown_complete().await;
 }
 
 async fn execute(
@@ -59,7 +68,9 @@ async fn fetcher_stream<
     checksum_sender: mpsc::Sender<(Arc<Path>, Checksum)>,
     sources: S,
 ) {
-    let mut fetcher = Fetcher::default()
+    let shutdown = crate::shutdown_handle().clone();
+
+    let fetcher = Fetcher::default()
         // Fetch each file in parts, using up to 4 concurrent connections per file
         .connections_per_file(4)
         // Pass in the event sender which events will be sent to
@@ -69,7 +80,9 @@ async fn fetcher_stream<
         // Finalize the fetcher so that it can perform fetch tasks.
         .build()
         // Build a stream that will perform fetches when polled.
-        .stream_from(sources, 4);
+        .stream_from(shutdown, sources, 4);
+
+    futures::pin_mut!(fetcher);
 
     while let Some((dest, checksum, result)) = fetcher.next().await {
         match result {

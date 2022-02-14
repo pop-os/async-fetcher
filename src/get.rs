@@ -37,6 +37,7 @@ impl FetchLocation {
 }
 pub(crate) async fn get<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
+    shutdown: async_shutdown::Shutdown,
     request: http::request::Builder,
     file: FetchLocation,
     final_destination: Arc<Path>,
@@ -79,6 +80,14 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let body = response.body_mut();
 
         loop {
+            let _shutdown = match shutdown.delay_shutdown_token() {
+                Ok(token) => token,
+                Err(_) => {
+                    let _ = file.shutdown().await;
+                    return Err(Error::Canceled);
+                }
+            };
+
             read = {
                 let reader = async { body.read(&mut buffer).await.map_err(Error::Write) };
 
@@ -112,12 +121,12 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             update_progress(read_total);
         }
 
-        let _ = file.flush().await;
+        let _ = file.shutdown().await;
 
         Ok(())
     };
 
-    task.await?;
+    tokio::task::spawn_local(task).await.unwrap()?;
 
     Ok(dest)
 }
