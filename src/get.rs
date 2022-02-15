@@ -126,7 +126,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         Ok(())
     };
 
-    tokio::task::spawn_local(task).await.unwrap()?;
+    tokio::spawn(task).await.unwrap()?;
 
     Ok(dest)
 }
