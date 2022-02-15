@@ -73,6 +73,7 @@ use std::{
     fmt::Debug,
     io,
     path::Path,
+    pin::Pin,
     sync::{atomic::AtomicU16, Arc},
     time::{Duration, UNIX_EPOCH},
 };
@@ -212,11 +213,11 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         shutdown: Shutdown,
         inputs: impl Stream<Item = (Source, Arc<Data>)> + Send + 'static,
         concurrent: usize,
-    ) -> impl Stream<Item = AsyncFetchOutput<Data>> + Send + 'static {
+    ) -> Pin<Box<dyn Stream<Item = AsyncFetchOutput<Data>> + Send + 'static>> {
         let cancel_trigger = shutdown.wait_shutdown_triggered();
 
         // Takes input requests and converts them into a stream of fetch requests.
-        inputs
+        let stream = inputs
             .map(move |(Source { dest, urls, part }, extra)| {
                 let shutdown = shutdown.clone();
                 let fetcher = self.clone();
@@ -225,7 +226,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         let task = async {
                             match part {
                                 Some(part) => match fetcher
-                                    .request(&shutdown, urls, part.clone(), extra.clone())
+                                    .request(shutdown.clone(), urls, part.clone(), extra.clone())
                                     .await
                                 {
                                     Ok(()) => {
@@ -235,7 +236,12 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                                 },
                                 None => {
                                     fetcher
-                                        .request(&shutdown, urls, dest.clone(), extra.clone())
+                                        .request(
+                                            shutdown.clone(),
+                                            urls,
+                                            dest.clone(),
+                                            extra.clone(),
+                                        )
                                         .await
                                 }
                             }
@@ -250,7 +256,9 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 }
             })
             .buffer_unordered(concurrent)
-            .take_until(cancel_trigger)
+            .take_until(cancel_trigger);
+
+        Box::pin(stream)
     }
 
     /// Request a file from one or more URIs.
@@ -259,7 +267,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     /// serves as a mirror for failover and load-balancing purposes.
     pub async fn request(
         self: Arc<Self>,
-        shutdown: &Shutdown,
+        shutdown: Shutdown,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         extra: Arc<Data>,
@@ -273,7 +281,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let fetch = || async {
             loop {
                 let task = self.clone().inner_request(
-                    shutdown,
+                    &shutdown,
                     uris.clone(),
                     to.clone(),
                     extra.clone(),
@@ -326,7 +334,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             Ok(())
         };
 
-        let result = crate::utils::shutdown_cancel(shutdown, task).await;
+        let result = crate::utils::shutdown_cancel(&shutdown, task).await;
 
         cleanup().await;
 
