@@ -37,13 +37,13 @@ impl FetchLocation {
 }
 pub(crate) async fn get<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
-    shutdown: async_shutdown::Shutdown,
     request: http::request::Builder,
     file: FetchLocation,
     final_destination: Arc<Path>,
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<Arc<Path>, crate::Error> {
+    let shutdown = fetcher.shutdown.clone();
     let FetchLocation { mut file, dest } = file;
 
     let request = request.body(()).expect("failed to build request");

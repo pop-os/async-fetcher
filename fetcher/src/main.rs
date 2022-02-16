@@ -68,9 +68,9 @@ async fn fetcher_stream<
     checksum_sender: mpsc::Sender<(Arc<Path>, Checksum)>,
     sources: S,
 ) {
-    let shutdown = crate::shutdown_handle().clone();
-
     let fetcher = Fetcher::default()
+        // Add a handle to the shutdown mechanism used by this application.
+        .shutdown(crate::shutdown_handle().clone())
         // Fetch each file in parts, using up to 4 concurrent connections per file
         .connections_per_file(4)
         // Pass in the event sender which events will be sent to
@@ -80,7 +80,7 @@ async fn fetcher_stream<
         // Finalize the fetcher so that it can perform fetch tasks.
         .build()
         // Build a stream that will perform fetches when polled.
-        .stream_from(shutdown, sources, 4);
+        .stream_from(sources, 4);
 
     futures::pin_mut!(fetcher);
 

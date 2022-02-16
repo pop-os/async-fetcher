@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicU16;
 
 pub async fn get_many<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
-    shutdown: &async_shutdown::Shutdown,
     to: Arc<Path>,
     uris: Arc<[Box<str>]>,
     offset: u64,
@@ -16,6 +15,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<(), Error> {
+    let shutdown = fetcher.shutdown.clone();
     let parent = to.parent().ok_or(Error::Parentless)?.to_owned();
     let filename = to.file_name().ok_or(Error::Nameless)?.to_owned();
 
@@ -51,7 +51,6 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
                     crate::get(
                         fetcher.clone(),
-                        shutdown.clone(),
                         Request::get(&*uri).header("range", range.as_str()),
                         FetchLocation::create(
                             part_path.clone(),

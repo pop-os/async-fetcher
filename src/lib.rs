@@ -11,6 +11,10 @@
 //! - Progress events for fetches
 //!
 //! ```
+//! let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
+//!
+//! let shutdown = async_shutdown::Shutdown::new();
+//!
 //! let results_stream = Fetcher::default()
 //!     // Define a max number of ranged connections per file.
 //!     .connections_per_file(4)
@@ -20,6 +24,8 @@
 //!     .events(events_tx)
 //!     // Maximum number of retry attempts.
 //!     .retries(3)
+//!     // Cancels the fetching process when a shutdown is triggered.
+//!     .shutdown(shutdown)
 //!     // How long to wait before aborting a download that hasn't progressed.
 //!     .timeout(Duration::from_secs(15))
 //!     // Finalize the struct into an `Arc` for use with fetching.
@@ -185,6 +191,10 @@ pub struct Fetcher<Data> {
     #[setters(into)]
     #[setters(strip_option)]
     events: Option<Arc<EventSender<Arc<Data>>>>,
+
+    /// Utilized to know when to shut down the fetching process.
+    #[new(value = "Shutdown::new()")]
+    shutdown: Shutdown,
 }
 
 impl<Data> Default for Fetcher<Data> {
@@ -210,40 +220,30 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     /// One task for managing the fetch tasks, and one task per fetch request.
     pub fn stream_from(
         self: Arc<Self>,
-        shutdown: Shutdown,
         inputs: impl Stream<Item = (Source, Arc<Data>)> + Send + 'static,
         concurrent: usize,
     ) -> Pin<Box<dyn Stream<Item = AsyncFetchOutput<Data>> + Send + 'static>> {
+        let shutdown = self.shutdown.clone();
         let cancel_trigger = shutdown.wait_shutdown_triggered();
 
         // Takes input requests and converts them into a stream of fetch requests.
         let stream = inputs
             .map(move |(Source { dest, urls, part }, extra)| {
-                let shutdown = shutdown.clone();
                 let fetcher = self.clone();
                 async move {
                     tokio::spawn(async move {
+                        let shutdown = fetcher.shutdown.clone();
                         let task = async {
                             match part {
-                                Some(part) => match fetcher
-                                    .request(shutdown.clone(), urls, part.clone(), extra.clone())
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        fs::rename(&*part, &*dest).await.map_err(Error::Rename)
+                                Some(part) => {
+                                    match fetcher.request(urls, part.clone(), extra.clone()).await {
+                                        Ok(()) => {
+                                            fs::rename(&*part, &*dest).await.map_err(Error::Rename)
+                                        }
+                                        Err(why) => Err(why),
                                     }
-                                    Err(why) => Err(why),
-                                },
-                                None => {
-                                    fetcher
-                                        .request(
-                                            shutdown.clone(),
-                                            urls,
-                                            dest.clone(),
-                                            extra.clone(),
-                                        )
-                                        .await
                                 }
+                                None => fetcher.request(urls, dest.clone(), extra.clone()).await,
                             }
                         };
 
@@ -267,7 +267,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     /// serves as a mirror for failover and load-balancing purposes.
     pub async fn request(
         self: Arc<Self>,
-        shutdown: Shutdown,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         extra: Arc<Data>,
@@ -281,7 +280,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let fetch = || async {
             loop {
                 let task = self.clone().inner_request(
-                    &shutdown,
                     uris.clone(),
                     to.clone(),
                     extra.clone(),
@@ -334,7 +332,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             Ok(())
         };
 
-        let result = crate::utils::shutdown_cancel(&shutdown, task).await;
+        let result = crate::utils::shutdown_cancel(&self.shutdown, task).await;
 
         cleanup().await;
 
@@ -347,7 +345,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
     async fn inner_request(
         self: Arc<Self>,
-        shutdown: &Shutdown,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         extra: Arc<Data>,
@@ -410,7 +407,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                     get_many(
                         self.clone(),
-                        shutdown,
                         to.clone(),
                         uris,
                         resume,
@@ -450,7 +446,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         let path = match crate::get(
             self.clone(),
-            shutdown.clone(),
             request,
             FetchLocation::create(to.clone(), length, resume != 0).await?,
             to.clone(),
@@ -468,7 +463,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 let request = Request::get(&*uris[0]);
                 crate::get(
                     self.clone(),
-                    shutdown.clone(),
                     request,
                     FetchLocation::create(to.clone(), length, resume != 0).await?,
                     to.clone(),
