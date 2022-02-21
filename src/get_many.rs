@@ -21,8 +21,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
     let mut buf = [0u8; 20];
 
-    let FetchLocation { mut file, .. } =
-        FetchLocation::create(to.clone(), None, offset != 0).await?;
+    let FetchLocation { file, .. } = FetchLocation::create(to.clone(), None, offset != 0).await?;
 
     let concurrent_fetches = fetcher.connections_per_file as usize;
 
@@ -72,7 +71,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
     let _shutdown_token = shutdown.delay_shutdown_token();
 
-    concatenator(&mut file, parts).await?;
+    concatenator(file, parts).await?;
 
     if let Some(modified) = modified {
         crate::time::update_modified(&to, modified)?;

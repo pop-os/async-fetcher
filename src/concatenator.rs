@@ -9,23 +9,27 @@ use tokio::fs::{self, File};
 use tokio::io::{copy, AsyncWriteExt};
 
 /// Accepts a stream of future file `parts` and concatenates them into the `dest` file.
-pub async fn concatenator<P>(dest: &mut File, mut parts: P) -> Result<(), Error>
+pub async fn concatenator<P: 'static>(mut dest: File, mut parts: P) -> Result<(), Error>
 where
     P: Stream<Item = Result<Arc<Path>, Error>> + Send + Unpin,
 {
-    let result = async {
-        while let Some(task_result) = parts.next().await {
-            let part_path: Arc<Path> = task_result?;
-            concatenate(dest, part_path).await?;
+    let task = tokio::spawn(async move {
+        let result = async {
+            while let Some(task_result) = parts.next().await {
+                let part_path: Arc<Path> = task_result?;
+                concatenate(&mut dest, part_path).await?;
+            }
+
+            Ok(())
         }
+        .await;
 
-        Ok(())
-    }
-    .await;
+        let _ = dest.shutdown().await;
 
-    let _ = dest.shutdown().await;
+        result
+    });
 
-    result
+    task.await.unwrap()
 }
 
 /// Concatenates a part into a file.
