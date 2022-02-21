@@ -21,7 +21,11 @@ where
     let task = tokio::spawn(async move {
         let task = async {
             while let Some(task_result) = parts.next().await {
-                let _shutdown_token = shutdown.delay_shutdown_token();
+                let _token = match shutdown.delay_shutdown_token() {
+                    Ok(token) => token,
+                    Err(_) => return Err(Error::Canceled),
+                };
+
                 let part_path: Arc<Path> = task_result?;
                 concatenate(&mut dest, part_path).await?;
             }
@@ -29,7 +33,7 @@ where
             Ok(())
         };
 
-        let result = crate::utils::shutdown_cancel(&shutdown, task).await;
+        let result = task.await;
 
         let _ = dest.shutdown().await;
 

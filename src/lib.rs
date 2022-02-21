@@ -286,7 +286,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     attempts.clone(),
                 );
 
-                let result = crate::utils::network_interrupt(task).await;
+                let result = task.await;
 
                 if let Err(Error::NetworkChanged) = result {
                     debug!("network connection changed");

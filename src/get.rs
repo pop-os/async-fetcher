@@ -126,7 +126,9 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         Ok(())
     };
 
-    tokio::spawn(task).await.unwrap()?;
+    tokio::spawn(crate::utils::network_interrupt(task))
+        .await
+        .unwrap()?;
 
     Ok(dest)
 }
