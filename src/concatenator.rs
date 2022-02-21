@@ -3,26 +3,32 @@
 
 use crate::Error;
 
+use async_shutdown::Shutdown;
 use futures::{Stream, StreamExt};
 use std::{path::Path, sync::Arc};
 use tokio::fs::{self, File};
 use tokio::io::{copy, AsyncWriteExt};
 
 /// Accepts a stream of future file `parts` and concatenates them into the `dest` file.
-pub async fn concatenator<P: 'static>(mut dest: File, mut parts: P) -> Result<(), Error>
+pub async fn concatenator<P: 'static>(
+    mut dest: File,
+    mut parts: P,
+    shutdown: Shutdown,
+) -> Result<(), Error>
 where
     P: Stream<Item = Result<Arc<Path>, Error>> + Send + Unpin,
 {
     let task = tokio::spawn(async move {
-        let result = async {
+        let task = async {
             while let Some(task_result) = parts.next().await {
                 let part_path: Arc<Path> = task_result?;
                 concatenate(&mut dest, part_path).await?;
             }
 
             Ok(())
-        }
-        .await;
+        };
+
+        let result = crate::utils::shutdown_cancel(&shutdown, task).await;
 
         let _ = dest.shutdown().await;
 
