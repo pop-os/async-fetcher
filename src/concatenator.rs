@@ -21,6 +21,7 @@ where
     let task = tokio::spawn(async move {
         let task = async {
             while let Some(task_result) = parts.next().await {
+                let _shutdown_token = shutdown.delay_shutdown_token();
                 let part_path: Arc<Path> = task_result?;
                 concatenate(&mut dest, part_path).await?;
             }
