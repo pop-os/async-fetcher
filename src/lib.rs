@@ -288,7 +288,9 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                 let result = task.await;
 
-                if let Err(Error::NetworkChanged) = result {
+                debug!("inner_request fetch result is {:?}", result);
+
+                if let Err(Error::NetworkChanged) | Err(Error::TimedOut) = result {
                     debug!("network connection changed");
                     let mut attempts = 5;
                     while attempts != 0 {
@@ -303,6 +305,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         attempts -= 1;
                     }
 
+                    debug!("connection established; retrying");
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
                     continue;
@@ -350,6 +353,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         extra: Arc<Data>,
         attempts: Arc<AtomicU16>,
     ) -> Result<(), Error> {
+        debug!("fetching {:?}", to);
+
         let mut length = None;
         let mut modified = None;
         let mut resume = 0;
