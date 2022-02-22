@@ -22,7 +22,7 @@ pub async fn network_interrupt<T>(
 
 pub async fn run_timed<F, T>(duration: Option<Duration>, future: F) -> Result<T, Error>
 where
-    F: Future<Output = T>,
+    F: Future<Output = Result<T, Error>>,
 {
     let timeout = async move {
         match duration {
@@ -34,12 +34,10 @@ where
         }
     };
 
-    let result = async move { Ok(future.await) };
-
-    futures::pin_mut!(result);
+    futures::pin_mut!(future);
     futures::pin_mut!(timeout);
 
-    select(timeout, result).await.factor_first().0
+    select(timeout, future).await.factor_first().0
 }
 
 pub async fn shutdown_cancel<F: Future<Output = Result<(), crate::Error>>>(

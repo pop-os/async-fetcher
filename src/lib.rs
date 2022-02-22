@@ -308,6 +308,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         );
 
                         if net_check.await.is_ok() {
+                            tokio::time::sleep(Duration::from_secs(3)).await;
                             break;
                         }
 
@@ -316,6 +317,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                     debug!("connection established; retrying");
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
+                    tokio::time::sleep(Duration::from_secs(3)).await;
 
                     continue;
                 }

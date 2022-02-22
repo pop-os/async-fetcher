@@ -103,7 +103,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                 futures::pin_mut!(reader);
 
                 let timed = crate::utils::run_timed(fetcher.timeout, reader);
-                crate::utils::network_interrupt(timed).await??
+                crate::utils::network_interrupt(timed).await?
             };
 
             if read == 0 {
