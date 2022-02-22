@@ -237,7 +237,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                             Err(_) => return (dest, extra, Err(Error::Canceled)),
                         };
 
-                        let shutdown = fetcher.shutdown.clone();
                         let task = async {
                             match part {
                                 Some(part) => {
@@ -252,7 +251,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                             }
                         };
 
-                        let result = crate::utils::shutdown_cancel(&shutdown, task).await;
+                        let result = task.await;
 
                         (dest, extra, result)
                     })
@@ -332,6 +331,10 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         let task = async {
             if let Err(mut why) = fetch().await {
+                if let Error::Canceled = why {
+                    return Err(why);
+                }
+
                 while attempts.fetch_add(1, Ordering::SeqCst) < self.retries {
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
@@ -346,7 +349,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             Ok(())
         };
 
-        let result = crate::utils::shutdown_cancel(&self.shutdown, task).await;
+        let result = task.await;
 
         cleanup().await;
 
@@ -389,6 +392,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                         if metadata.len() == length {
                             if ts.as_secs() == date_as_timestamp(last_modified) {
+                                debug!("already fetched {}", to.display());
                                 self.send(|| (to, extra.clone(), FetchEvent::AlreadyFetched));
                                 return Ok(());
                             } else {
@@ -421,7 +425,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(resume)));
                     }
 
-                    get_many(
+                    let result = get_many(
                         self.clone(),
                         to.clone(),
                         uris,
@@ -431,7 +435,13 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         extra,
                         attempts.clone(),
                     )
-                    .await?;
+                    .await;
+
+                    debug!("get_many {}: {:?}", to.display(), result);
+
+                    if let Err(why) = result {
+                        return Err(why);
+                    }
 
                     if let Some(modified) = modified {
                         update_modified(&to, modified)?;
@@ -471,7 +481,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         .await
         {
             Ok(path) => path,
-
             Err(Error::Status(StatusCode::NOT_MODIFIED)) => to,
 
             // Server does not support if-modified-since

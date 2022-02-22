@@ -43,8 +43,12 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<Arc<Path>, crate::Error> {
+    crate::utils::shutdown_check(&fetcher.shutdown)?;
+
     let shutdown = fetcher.shutdown.clone();
     let FetchLocation { mut file, dest } = file;
+
+    debug!("GET {}", dest.display());
 
     let request = request.body(()).expect("failed to build request");
 
@@ -65,7 +69,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let initial_response = crate::utils::network_interrupt(req).await?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
-            return Ok::<_, crate::Error>(());
+            return Ok::<Arc<Path>, crate::Error>(dest);
         }
 
         let response = &mut validate(initial_response)?;
@@ -89,13 +93,10 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let body = response.body_mut();
 
         loop {
-            let _shutdown = match shutdown.delay_shutdown_token() {
-                Ok(token) => token,
-                Err(_) => {
-                    let _ = file.shutdown().await;
-                    return Err(Error::Canceled);
-                }
-            };
+            if shutdown.shutdown_started() || shutdown.shutdown_completed() {
+                let _ = file.shutdown().await;
+                return Err(Error::Canceled);
+            }
 
             read = {
                 let reader = async { body.read(&mut buffer).await.map_err(Error::Write) };
@@ -103,7 +104,14 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                 futures::pin_mut!(reader);
 
                 let timed = crate::utils::run_timed(fetcher.timeout, reader);
-                crate::utils::network_interrupt(timed).await?
+                match crate::utils::network_interrupt(timed).await {
+                    Ok(bytes) => bytes,
+                    Err(why) => {
+                        let _ = file.shutdown().await;
+                        debug!("GET {} interrupted", dest.display());
+                        return Err(why);
+                    }
+                }
             };
 
             if read == 0 {
@@ -132,11 +140,10 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         }
 
         let _ = file.shutdown().await;
+        debug!("GET {} complete", dest.display());
 
-        Ok(())
+        Ok(dest)
     };
 
-    tokio::spawn(task).await.unwrap()?;
-
-    Ok(dest)
+    tokio::spawn(task).await.unwrap()
 }

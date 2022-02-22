@@ -13,6 +13,7 @@ use tokio::io::{copy, AsyncWriteExt};
 pub async fn concatenator<P: 'static>(
     mut dest: File,
     mut parts: P,
+    path: Arc<Path>,
     shutdown: Shutdown,
 ) -> Result<(), Error>
 where
@@ -26,14 +27,16 @@ where
 
         let task = async {
             while let Some(task_result) = parts.next().await {
-                let _token = match shutdown.delay_shutdown_token() {
-                    Ok(token) => token,
-                    Err(_) => return Err(Error::Canceled),
-                };
+                crate::utils::shutdown_check(&shutdown)?;
 
                 let part_path: Arc<Path> = task_result?;
+                debug!("CONCAT {:?}", part_path.display());
                 concatenate(&mut dest, part_path).await?;
+
+                crate::utils::shutdown_check(&shutdown)?;
             }
+
+            crate::utils::shutdown_check(&shutdown)?;
 
             Ok(())
         };
@@ -41,6 +44,7 @@ where
         let result = task.await;
 
         let _ = dest.shutdown().await;
+        debug!("CONCAT flush {}", path.display());
 
         result
     });

@@ -40,19 +40,10 @@ where
     select(timeout, future).await.factor_first().0
 }
 
-pub async fn shutdown_cancel<F: Future<Output = Result<(), crate::Error>>>(
-    shutdown: &async_shutdown::Shutdown,
-    future: F,
-) -> Result<(), crate::Error> {
-    let canceled = shutdown.wait_shutdown_triggered();
-
-    futures::pin_mut!(future);
-    futures::pin_mut!(canceled);
-
-    use futures::future::Either;
-
-    match futures::future::select(canceled, future).await {
-        Either::Left((_, _)) => Err(crate::Error::Canceled),
-        Either::Right((result, _)) => result,
+pub fn shutdown_check(shutdown: &async_shutdown::Shutdown) -> Result<(), crate::Error> {
+    if shutdown.shutdown_started() || shutdown.shutdown_completed() {
+        return Err(Error::Canceled);
     }
+
+    Ok(())
 }

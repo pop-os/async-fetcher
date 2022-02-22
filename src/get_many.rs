@@ -71,7 +71,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
     let _shutdown_token = shutdown.delay_shutdown_token();
 
-    concatenator(file, parts, shutdown.clone()).await?;
+    concatenator(file, parts, to.clone(), shutdown.clone()).await?;
 
     if let Some(modified) = modified {
         crate::time::update_modified(&to, modified)?;
