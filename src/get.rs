@@ -49,11 +49,20 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     let request = request.body(()).expect("failed to build request");
 
     let task = async move {
-        let initial_response = fetcher
-            .client
-            .send_async(request)
-            .await
-            .map_err(Error::from)?;
+        let _token = match shutdown.delay_shutdown_token() {
+            Ok(token) => token,
+            Err(_) => return Err(Error::Canceled),
+        };
+
+        let req = async {
+            fetcher
+                .client
+                .send_async(request)
+                .await
+                .map_err(Error::from)
+        };
+
+        let initial_response = crate::utils::network_interrupt(req).await?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
             return Ok::<_, crate::Error>(());
@@ -93,7 +102,8 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
                 futures::pin_mut!(reader);
 
-                crate::utils::run_timed(fetcher.timeout, reader).await??
+                let timed = crate::utils::run_timed(fetcher.timeout, reader);
+                crate::utils::network_interrupt(timed).await??
             };
 
             if read == 0 {
@@ -126,9 +136,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         Ok(())
     };
 
-    tokio::spawn(crate::utils::network_interrupt(task))
-        .await
-        .unwrap()?;
+    tokio::spawn(task).await.unwrap()?;
 
     Ok(dest)
 }

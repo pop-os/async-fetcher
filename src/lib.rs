@@ -232,6 +232,11 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 let fetcher = self.clone();
                 async move {
                     tokio::spawn(async move {
+                        let _token = match fetcher.shutdown.delay_shutdown_token() {
+                            Ok(token) => token,
+                            Err(_) => return (dest, extra, Err(Error::Canceled)),
+                        };
+
                         let shutdown = fetcher.shutdown.clone();
                         let task = async {
                             match part {
@@ -294,6 +299,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     debug!("network connection changed");
                     let mut attempts = 5;
                     while attempts != 0 {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
                         debug!("checking for online connection");
 
                         let net_check = crate::utils::run_timed(
@@ -301,9 +307,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                             crate::utils::network_interrupt(head(&self.client, &uris[0])),
                         );
 
-                        if net_check.await.is_err() {
-                            tokio::time::sleep(Duration::from_secs(3)).await;
-                        } else {
+                        if net_check.await.is_ok() {
                             break;
                         }
 

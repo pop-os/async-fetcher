@@ -19,6 +19,11 @@ where
     P: Stream<Item = Result<Arc<Path>, Error>> + Send + Unpin,
 {
     let task = tokio::spawn(async move {
+        let _token = match shutdown.delay_shutdown_token() {
+            Ok(token) => token,
+            Err(_) => return Err(Error::Canceled),
+        };
+
         let task = async {
             while let Some(task_result) = parts.next().await {
                 let _token = match shutdown.delay_shutdown_token() {
