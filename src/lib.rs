@@ -295,8 +295,13 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     let mut attempts = 5;
                     while attempts != 0 {
                         debug!("checking for online connection");
-                        let net_check = head(&self.client, &uris[0]);
-                        if crate::utils::network_interrupt(net_check).await.is_err() {
+
+                        let net_check = crate::utils::run_timed(
+                            Some(Duration::from_secs(3)),
+                            crate::utils::network_interrupt(head(&self.client, &uris[0])),
+                        );
+
+                        if net_check.await.is_err() {
                             tokio::time::sleep(Duration::from_secs(3)).await;
                         } else {
                             break;

@@ -22,7 +22,7 @@ pub async fn network_interrupt<T>(
 
 pub async fn run_timed<F, T>(duration: Option<Duration>, future: F) -> Result<T, Error>
 where
-    F: Future<Output = T> + Unpin,
+    F: Future<Output = T>,
 {
     let timeout = async move {
         match duration {
