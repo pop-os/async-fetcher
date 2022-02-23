@@ -38,6 +38,10 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                     parent.join(new_filename)
                 };
 
+                if part_path.exists() {
+                    let _ = std::fs::remove_file(&part_path);
+                }
+
                 let fetcher = fetcher.clone();
                 let to = to_.clone();
                 let extra = extra.clone();

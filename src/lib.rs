@@ -435,8 +435,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     )
                     .await;
 
-                    debug!("get_many {}: {:?}", to.display(), result);
-
                     if let Err(why) = result {
                         return Err(why);
                     }
