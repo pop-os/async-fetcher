@@ -316,6 +316,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                     debug!("connection established; retrying");
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
+                    remove_parts(&to).await;
                     tokio::time::sleep(Duration::from_secs(3)).await;
 
                     continue;
@@ -325,10 +326,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             }
         };
 
-        let cleanup = || async {
-            remove_parts(&to).await;
-        };
-
         let task = async {
             if let Err(mut why) = fetch().await {
                 if let Error::Canceled = why {
@@ -336,6 +333,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 }
 
                 while attempts.fetch_add(1, Ordering::SeqCst) < self.retries {
+                    remove_parts(&to).await;
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
 
                     if let Err(source) = fetch().await {
@@ -351,7 +349,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         let result = task.await;
 
-        cleanup().await;
+        remove_parts(&to).await;
 
         if result.is_ok() {
             self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
