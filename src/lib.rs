@@ -461,6 +461,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         if resume != 0 {
             if let Ok(true) = supports_range(&self.client, &*uris[0], resume, length).await {
                 request = request.header("Range", range::to_string(resume, length));
+                self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(resume)));
             } else {
                 resume = 0;
             }
