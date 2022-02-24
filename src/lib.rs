@@ -365,6 +365,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         extra: Arc<Data>,
         attempts: Arc<AtomicU16>,
     ) -> Result<(), Error> {
+        nix::unistd::sync();
+
         debug!("fetching {:?}", to);
 
         let mut length = None;
