@@ -469,7 +469,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let path = match crate::get(
             self.clone(),
             request,
-            FetchLocation::create(to.clone(), length, resume != 0).await?,
+            FetchLocation::create(to.clone(), None, resume != 0).await?,
             to.clone(),
             extra.clone(),
             attempts.clone(),
@@ -485,7 +485,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 crate::get(
                     self.clone(),
                     request,
-                    FetchLocation::create(to.clone(), length, resume != 0).await?,
+                    FetchLocation::create(to.clone(), None, resume != 0).await?,
                     to.clone(),
                     extra.clone(),
                     attempts,
