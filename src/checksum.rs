@@ -18,8 +18,8 @@ pub enum Checksum {
 /// An error that can occur from a failed checksum validation.
 #[derive(Debug, Error)]
 pub enum ChecksumError {
-    #[error("expected {}, found {}", hex::encode(_0), hex::encode(_1))]
-    Invalid(Box<[u8]>, Box<[u8]>),
+    #[error("expected {}, found {}", _0, _1)]
+    Invalid(String, String),
     #[error("I/O error encountered while reading from reader")]
     IO(#[from] io::Error),
 }
@@ -74,26 +74,33 @@ impl Checksum {
     }
 }
 
-fn checksum<D: Digest, F: std::io::Read>(
-    mut reader: F,
+pub(crate) fn checksum<D: Digest, F: io::Read>(
+    reader: F,
     buffer: &mut [u8],
     expected: &GenericArray<u8, D::OutputSize>,
 ) -> Result<(), ChecksumError> {
+    let result = generate_checksum::<D, F>(reader, buffer)
+        .map_err(ChecksumError::IO)?;
+
+    if result == *expected {
+        Ok(())
+    } else {
+        Err(ChecksumError::Invalid(hex::encode(expected), hex::encode(result)))
+    }
+}
+
+pub(crate) fn generate_checksum<D: Digest, F: io::Read>(
+    mut reader: F,
+    buffer: &mut [u8],
+) -> io::Result<GenericArray<u8, D::OutputSize>> {
     let mut hasher = D::new();
     let mut read;
 
     loop {
-        read = reader.read(buffer).map_err(ChecksumError::IO)?;
+        read = reader.read(buffer)?;
 
         if read == 0 {
-            let result = hasher.finalize();
-            return if result == *expected {
-                Ok(())
-            } else {
-                let expected = expected.clone().into_iter().collect::<Vec<u8>>().into();
-                let actual = result.into_iter().collect::<Vec<u8>>().into();
-                Err(ChecksumError::Invalid(expected, actual))
-            };
+            return Ok(hasher.finalize());
         }
 
         hasher.update(&buffer[..read]);
