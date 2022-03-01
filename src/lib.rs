@@ -71,9 +71,8 @@ use futures::{
 };
 use http::StatusCode;
 use httpdate::HttpDate;
-use isahc::config::Configurable;
-use isahc::{AsyncBody, HttpClient as Client, Request, Response};
 use numtoa::NumToA;
+use reqwest::{Client, Response};
 use std::sync::atomic::Ordering;
 use std::{
     fmt::Debug,
@@ -98,7 +97,7 @@ pub enum Error {
     #[error("task was canceled")]
     Canceled,
     #[error("http client error")]
-    Client(isahc::Error),
+    Client(#[source] reqwest::Error),
     #[error("unable to concatenate fetched parts")]
     Concatenate(#[source] io::Error),
     #[error("unable to create file")]
@@ -121,6 +120,8 @@ pub enum Error {
     TimedOut,
     #[error("error writing to file")]
     Write(#[source] io::Error),
+    #[error("fetch error")]
+    Read(#[source] reqwest::Error),
     #[error("failed to rename partial to destination")]
     Rename(#[source] io::Error),
     #[error("server responded with an error: {}", _0)]
@@ -129,8 +130,8 @@ pub enum Error {
     TokioSpawn(#[source] tokio::task::JoinError),
 }
 
-impl From<isahc::Error> for Error {
-    fn from(e: isahc::Error) -> Self {
+impl From<reqwest::Error> for Error {
+    fn from(e: reqwest::Error) -> Self {
         Self::Client(e)
     }
 }
@@ -199,12 +200,7 @@ pub struct Fetcher<Data> {
 
 impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
-        Self::new(
-            Client::builder()
-                .redirect_policy(isahc::config::RedirectPolicy::Follow)
-                .build()
-                .expect("failed to build HTTP client"),
-        )
+        Self::new(Client::new())
     }
 }
 
@@ -458,7 +454,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             }
         }
 
-        let mut request = Request::get(&*uris[0]);
+        let mut request = self.client.get(&*uris[0]);
 
         if resume != 0 {
             if let Ok(true) = supports_range(&self.client, &*uris[0], resume, length).await {
@@ -484,7 +480,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
-                let request = Request::get(&*uris[0]);
+                let request = self.client.get(&*uris[0]);
                 crate::get(
                     self.clone(),
                     request,
@@ -513,10 +509,10 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     }
 }
 
-async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBody>>, Error> {
-    let request = Request::head(uri).body(()).unwrap();
+async fn head(client: &Client, uri: &str) -> Result<Option<Response>, Error> {
+    let request = client.get(uri).build().unwrap();
 
-    match validate(client.send_async(request).await?).map(Some) {
+    match validate(client.execute(request).await?).map(Some) {
         result @ Ok(_) => result,
         Err(Error::Status(StatusCode::NOT_MODIFIED))
         | Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
@@ -530,12 +526,13 @@ async fn supports_range(
     resume: u64,
     length: Option<u64>,
 ) -> Result<bool, Error> {
-    let request = Request::head(uri)
+    let request = client
+        .head(uri)
         .header("Range", range::to_string(resume, length).as_str())
-        .body(())
+        .build()
         .unwrap();
 
-    let response = client.send_async(request).await?;
+    let response = client.execute(request).await?;
 
     if response.status() == StatusCode::PARTIAL_CONTENT {
         if let Some(header) = response.headers().get("Content-Range") {
@@ -552,7 +549,7 @@ async fn supports_range(
     }
 }
 
-fn validate(response: Response<AsyncBody>) -> Result<Response<AsyncBody>, Error> {
+fn validate(response: Response) -> Result<Response, Error> {
     let status = response.status();
 
     if status.is_informational() || status.is_success() {
@@ -567,7 +564,7 @@ trait ResponseExt {
     fn last_modified(&self) -> Option<HttpDate>;
 }
 
-impl ResponseExt for Response<AsyncBody> {
+impl ResponseExt for Response {
     fn content_length(&self) -> Option<u64> {
         let header = self.headers().get("content-length")?;
         header.to_str().ok()?.parse::<u64>().ok()

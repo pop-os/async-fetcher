@@ -27,6 +27,7 @@ where
 
         let task = async {
             let mut buffer = vec![0u8; 16 * 1024];
+            let mut nth = 0;
             while let Some(task_result) = parts.next().await {
                 crate::utils::shutdown_check(&shutdown)?;
 
@@ -34,8 +35,12 @@ where
 
                 {
                     let file = std::fs::File::open(&part_path).unwrap();
-                    let checksum = crate::checksum::generate_checksum::<md5::Md5, _>(file, &mut buffer).unwrap();
-                    debug!("CONCAT {:?} {:X}", part_path.display(), checksum);
+                    let checksum =
+                        crate::checksum::generate_checksum::<md5::Md5, _>(file, &mut buffer)
+                            .unwrap();
+
+                    debug!("CONCAT {}:{} {:X}", path.display(), nth, checksum);
+                    nth += 1;
                 };
 
                 concatenate(&mut dest, part_path).await?;
@@ -51,7 +56,6 @@ where
         let result = task.await;
 
         let _ = dest.shutdown().await;
-        debug!("CONCAT flush {}", path.display());
 
         result
     });

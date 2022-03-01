@@ -37,7 +37,7 @@ impl FetchLocation {
 }
 pub(crate) async fn get<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
-    request: http::request::Builder,
+    request: reqwest::RequestBuilder,
     file: FetchLocation,
     final_destination: Arc<Path>,
     extra: Arc<Data>,
@@ -48,9 +48,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     let shutdown = fetcher.shutdown.clone();
     let FetchLocation { mut file, dest } = file;
 
-    debug!("GET {}", dest.display());
-
-    let request = request.body(()).expect("failed to build request");
+    let request = request.build().expect("failed to build request");
 
     let task = async move {
         let _token = match shutdown.delay_shutdown_token() {
@@ -58,13 +56,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             Err(_) => return Err(Error::Canceled),
         };
 
-        let req = async {
-            fetcher
-                .client
-                .send_async(request)
-                .await
-                .map_err(Error::from)
-        };
+        let req = async { fetcher.client.execute(request).await.map_err(Error::from) };
 
         let initial_response = crate::utils::network_interrupt(req).await?;
 
@@ -72,10 +64,8 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             return Ok::<Arc<Path>, crate::Error>(dest);
         }
 
-        let response = &mut validate(initial_response)?;
+        let mut response = validate(initial_response)?.bytes_stream();
 
-        let mut buffer = vec![0u8; 16 * 1024];
-        let mut read;
         let mut read_total = 0;
 
         let mut now = Instant::now();
@@ -90,59 +80,63 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             });
         };
 
-        let body = response.body_mut();
+        let fetch_loop = async {
+            loop {
+                if shutdown.shutdown_started() || shutdown.shutdown_completed() {
+                    let _ = file.shutdown().await;
+                    return Err(Error::Canceled);
+                }
 
-        loop {
-            if shutdown.shutdown_started() || shutdown.shutdown_completed() {
-                let _ = file.shutdown().await;
-                return Err(Error::Canceled);
-            }
+                let chunk = {
+                    let reader = async { Ok(response.next().await) };
 
-            read = {
-                let reader = async { body.read(&mut buffer).await.map_err(Error::Write) };
+                    futures::pin_mut!(reader);
 
-                futures::pin_mut!(reader);
-
-                let timed = crate::utils::run_timed(fetcher.timeout, reader);
-                match crate::utils::network_interrupt(timed).await {
-                    Ok(bytes) => bytes,
-                    Err(why) => {
-                        let _ = file.shutdown().await;
-                        debug!("GET {} interrupted", dest.display());
-                        return Err(why);
+                    let timed = crate::utils::run_timed(fetcher.timeout, reader);
+                    match crate::utils::network_interrupt(timed).await {
+                        Ok(chunk) => chunk,
+                        Err(why) => {
+                            let _ = file.shutdown().await;
+                            debug!("GET {} interrupted", dest.display());
+                            return Err(why);
+                        }
                     }
+                };
+
+                match chunk {
+                    Some(chunk) => {
+                        let bytes = chunk.map_err(Error::Read)?;
+
+                        file.write_all(&*bytes).await.map_err(Error::Write)?;
+
+                        read_total += bytes.len();
+                        if now.elapsed().as_millis() > 500 {
+                            update_progress(read_total);
+
+                            now = Instant::now();
+                            read_total = 0;
+
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                    None => break,
                 }
-            };
 
-            if read == 0 {
-                break;
-            } else {
-                file.write_all(&buffer[..read])
-                    .await
-                    .map_err(Error::Write)?;
-
-                read_total += read;
-                if now.elapsed().as_millis() > 500 {
-                    update_progress(read_total);
-
-                    now = Instant::now();
-                    read_total = 0;
-
-                    tokio::task::yield_now().await;
-                }
+                attempts.store(0, Ordering::SeqCst);
             }
 
-            attempts.store(0, Ordering::SeqCst);
-        }
+            Ok(())
+        };
 
-        if read_total != 0 {
+        let result = fetch_loop.await;
+
+        let _ = file.shutdown().await;
+
+        if result.is_ok() && read_total != 0 {
             update_progress(read_total);
         }
 
-        let _ = file.shutdown().await;
-        debug!("GET {} complete", dest.display());
-
-        Ok(dest)
+        result.map(|_| dest)
     };
 
     tokio::spawn(task).await.unwrap()

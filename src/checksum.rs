@@ -79,13 +79,15 @@ pub(crate) fn checksum<D: Digest, F: io::Read>(
     buffer: &mut [u8],
     expected: &GenericArray<u8, D::OutputSize>,
 ) -> Result<(), ChecksumError> {
-    let result = generate_checksum::<D, F>(reader, buffer)
-        .map_err(ChecksumError::IO)?;
+    let result = generate_checksum::<D, F>(reader, buffer).map_err(ChecksumError::IO)?;
 
     if result == *expected {
         Ok(())
     } else {
-        Err(ChecksumError::Invalid(hex::encode(expected), hex::encode(result)))
+        Err(ChecksumError::Invalid(
+            hex::encode(expected),
+            hex::encode(result),
+        ))
     }
 }
 

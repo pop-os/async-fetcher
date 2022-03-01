@@ -5,6 +5,7 @@ use crate::get::FetchLocation;
 use crate::*;
 use std::sync::atomic::AtomicU16;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn get_many<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
     to: Arc<Path>,
@@ -15,6 +16,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<(), Error> {
+    debug!("GET MANY: {:?} {}", to, length);
     let shutdown = fetcher.shutdown.clone();
     let parent = to.parent().ok_or(Error::Parentless)?.to_owned();
     let filename = to.file_name().ok_or(Error::Nameless)?.to_owned();
@@ -49,12 +51,13 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
                 async move {
                     let range = range::to_string(range_start, Some(range_end));
+                    debug!("GET {:?} {}", to, range);
 
                     let part_path: Arc<Path> = Arc::from(part_path);
 
                     crate::get(
                         fetcher.clone(),
-                        Request::get(&*uri).header("range", range.as_str()),
+                        fetcher.client.get(&*uri).header("range", range.as_str()),
                         FetchLocation::create(
                             part_path.clone(),
                             Some(range_end - range_start),
