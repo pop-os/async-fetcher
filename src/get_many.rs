@@ -16,7 +16,6 @@ pub async fn get_many<Data: Send + Sync + 'static>(
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<(), Error> {
-    debug!("GET MANY: {:?} {}", to, length);
     let shutdown = fetcher.shutdown.clone();
     let parent = to.parent().ok_or(Error::Parentless)?.to_owned();
     let filename = to.file_name().ok_or(Error::Nameless)?.to_owned();
@@ -60,7 +59,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                         fetcher.client.get(&*uri).header("range", range.as_str()),
                         FetchLocation::create(
                             part_path.clone(),
-                            Some(range_end - range_start),
+                            None,
                             false,
                         )
                         .await?,
