@@ -52,6 +52,8 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                     let range = range::to_string(range_start, Some(range_end));
                     let part_path: Arc<Path> = Arc::from(part_path);
 
+                    debug!("RANGE {}:{} - {}", to.display(), partn, range);
+
                     crate::get(
                         fetcher.clone(),
                         fetcher.client.get(&*uri).header("range", range.as_str()),

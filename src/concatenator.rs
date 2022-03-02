@@ -5,9 +5,9 @@ use crate::Error;
 
 use async_shutdown::Shutdown;
 use futures::{Stream, StreamExt};
-use std::{path::Path, sync::Arc};
 use std::fs::{self, File};
 use std::io::{copy, Write};
+use std::{path::Path, sync::Arc};
 
 /// Accepts a stream of future file `parts` and concatenates them into the `dest` file.
 pub async fn concatenator<P: 'static>(
@@ -35,11 +35,19 @@ where
 
                 {
                     let file = std::fs::File::open(&part_path).unwrap();
+                    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+
                     let checksum =
                         crate::checksum::generate_checksum::<md5::Md5, _>(file, &mut buffer)
                             .unwrap();
 
-                    debug!("CONCAT {}:{} {:X}", path.display(), nth, checksum);
+                    debug!(
+                        "CONCAT {}:{} {:X} {} bytes",
+                        path.display(),
+                        nth,
+                        checksum,
+                        len
+                    );
                     nth += 1;
                 };
 
@@ -65,11 +73,12 @@ where
 
 /// Concatenates a part into a file.
 async fn concatenate(concatenated_file: &mut File, part_path: Arc<Path>) -> Result<(), Error> {
-    let mut file = File::open(&*part_path)
-        .map_err(|why| Error::OpenPart(part_path.clone(), why))?;
+    let mut file =
+        File::open(&*part_path).map_err(|why| Error::OpenPart(part_path.clone(), why))?;
 
-    copy(&mut file, concatenated_file)
-        .map_err(Error::Concatenate)?;
+    let written = copy(&mut file, concatenated_file).map_err(Error::Concatenate)?;
+
+    debug!("{} bytes written", written);
 
     if let Err(why) = fs::remove_file(&*part_path) {
         error!("failed to remove part file ({:?}): {}", part_path, why);
