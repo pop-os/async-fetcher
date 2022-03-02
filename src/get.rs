@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Instant;
-use tokio::io::AsyncWriteExt;
 
 pub(crate) struct FetchLocation {
-    pub(crate) file: tokio::fs::File,
+    pub(crate) file: std::fs::File,
     pub(crate) dest: Arc<Path>,
 }
 
@@ -19,17 +19,16 @@ impl FetchLocation {
         length: Option<u64>,
         append: bool,
     ) -> Result<Self, crate::Error> {
-        let file = tokio::fs::OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .append(append)
             .truncate(!append)
             .open(&dest)
-            .await
             .map_err(Error::FileCreate)?;
 
         if let Some(length) = length {
-            file.set_len(length).await.map_err(Error::Write)?;
+            file.set_len(length).map_err(Error::Write)?;
         }
 
         Ok(Self { file, dest })
@@ -83,7 +82,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let fetch_loop = async {
             loop {
                 if shutdown.shutdown_started() || shutdown.shutdown_completed() {
-                    let _ = file.shutdown().await;
+                    let _ = file.flush();
                     return Err(Error::Canceled);
                 }
 
@@ -96,7 +95,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                     match crate::utils::network_interrupt(timed).await {
                         Ok(chunk) => chunk,
                         Err(why) => {
-                            let _ = file.shutdown().await;
+                            let _ = file.flush();
                             debug!("GET {} interrupted", dest.display());
                             return Err(why);
                         }
@@ -107,7 +106,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                     Some(chunk) => {
                         let bytes = chunk.map_err(Error::Read)?;
 
-                        file.write_all(&*bytes).await.map_err(Error::Write)?;
+                        file.write_all(&*bytes).map_err(Error::Write)?;
 
                         read_total += bytes.len();
                         if now.elapsed().as_millis() > 500 {
@@ -115,8 +114,6 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
                             now = Instant::now();
                             read_total = 0;
-
-                            tokio::task::yield_now().await;
                         }
                     }
                     None => break,
@@ -130,7 +127,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
         let result = fetch_loop.await;
 
-        let _ = file.shutdown().await;
+        let _ = file.flush();
 
         if result.is_ok() && read_total != 0 {
             update_progress(read_total);

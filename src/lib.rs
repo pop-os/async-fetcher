@@ -291,11 +291,9 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 debug!("inner_request fetch result is {:?}", result);
 
                 if let Err(Error::NetworkChanged) | Err(Error::TimedOut) = result {
-                    debug!("network connection changed");
                     let mut attempts = 5;
                     while attempts != 0 {
                         tokio::time::sleep(Duration::from_secs(3)).await;
-                        debug!("checking for online connection");
 
                         let net_check = crate::utils::run_timed(
                             Some(Duration::from_secs(3)),
@@ -310,7 +308,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         attempts -= 1;
                     }
 
-                    debug!("connection established; retrying");
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
                     remove_parts(&to).await;
                     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -361,10 +358,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         extra: Arc<Data>,
         attempts: Arc<AtomicU16>,
     ) -> Result<(), Error> {
-        nix::unistd::sync();
-
-        debug!("fetching {:?}", to);
-
         let mut length = None;
         let mut modified = None;
         let mut resume = 0;
@@ -388,7 +381,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                         if metadata.len() == length {
                             if ts.as_secs() == date_as_timestamp(last_modified) {
-                                debug!("already fetched {}", to.display());
+                                info!("already fetched {}", to.display());
                                 self.send(|| (to, extra.clone(), FetchEvent::AlreadyFetched));
                                 return Ok(());
                             } else {

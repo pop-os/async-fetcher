@@ -6,8 +6,8 @@ use crate::Error;
 use async_shutdown::Shutdown;
 use futures::{Stream, StreamExt};
 use std::{path::Path, sync::Arc};
-use tokio::fs::{self, File};
-use tokio::io::{copy, AsyncWriteExt};
+use std::fs::{self, File};
+use std::io::{copy, Write};
 
 /// Accepts a stream of future file `parts` and concatenates them into the `dest` file.
 pub async fn concatenator<P: 'static>(
@@ -55,7 +55,7 @@ where
 
         let result = task.await;
 
-        let _ = dest.shutdown().await;
+        let _ = dest.flush();
 
         result
     });
@@ -66,14 +66,12 @@ where
 /// Concatenates a part into a file.
 async fn concatenate(concatenated_file: &mut File, part_path: Arc<Path>) -> Result<(), Error> {
     let mut file = File::open(&*part_path)
-        .await
         .map_err(|why| Error::OpenPart(part_path.clone(), why))?;
 
     copy(&mut file, concatenated_file)
-        .await
         .map_err(Error::Concatenate)?;
 
-    if let Err(why) = fs::remove_file(&*part_path).await {
+    if let Err(why) = fs::remove_file(&*part_path) {
         error!("failed to remove part file ({:?}): {}", part_path, why);
     }
 
