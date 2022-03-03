@@ -6,7 +6,7 @@ use crate::Error;
 use async_shutdown::Shutdown;
 use futures::{Stream, StreamExt};
 use std::fs::{self, File};
-use std::io::{copy, Write};
+use std::io::copy;
 use std::{path::Path, sync::Arc};
 
 /// Accepts a stream of future file `parts` and concatenates them into the `dest` file.
@@ -19,7 +19,7 @@ pub async fn concatenator<P: 'static>(
 where
     P: Stream<Item = Result<Arc<Path>, Error>> + Send + Unpin,
 {
-    let task = tokio::spawn(async move {
+    let main = async move {
         let _token = match shutdown.delay_shutdown_token() {
             Ok(token) => token,
             Err(_) => return Err(Error::Canceled),
@@ -48,17 +48,16 @@ where
                         checksum,
                         len
                     );
+
                     nth += 1;
                 };
 
-                concatenate(&mut dest, part_path).await?;
+                concatenate(&mut dest, part_path)?;
 
                 crate::utils::shutdown_check(&shutdown)?;
             }
 
-            crate::utils::shutdown_check(&shutdown)?;
-
-            Ok(())
+            crate::utils::shutdown_check(&shutdown)
         };
 
         let result = task.await;
@@ -66,19 +65,19 @@ where
         let _ = dest.sync_all();
 
         result
-    });
+    };
 
-    task.await.unwrap()
+    tokio::task::spawn_blocking(|| futures::executor::block_on(main))
+        .await
+        .unwrap()
 }
 
 /// Concatenates a part into a file.
-async fn concatenate(concatenated_file: &mut File, part_path: Arc<Path>) -> Result<(), Error> {
+fn concatenate(concatenated_file: &mut File, part_path: Arc<Path>) -> Result<(), Error> {
     let mut file =
         File::open(&*part_path).map_err(|why| Error::OpenPart(part_path.clone(), why))?;
 
-    let written = copy(&mut file, concatenated_file).map_err(Error::Concatenate)?;
-
-    debug!("{} bytes written", written);
+    copy(&mut file, concatenated_file).map_err(Error::Concatenate)?;
 
     if let Err(why) = fs::remove_file(&*part_path) {
         error!("failed to remove part file ({:?}): {}", part_path, why);

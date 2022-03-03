@@ -22,7 +22,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
     let mut buf = [0u8; 20];
 
-    let FetchLocation { file, .. } = FetchLocation::create(to.clone(), None, offset != 0).await?;
+    let FetchLocation { file, .. } = FetchLocation::create(to.clone(), offset != 0).await?;
 
     let concurrent_fetches = fetcher.connections_per_file as usize;
 
@@ -57,7 +57,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                     crate::get(
                         fetcher.clone(),
                         fetcher.client.get(&*uri).header("range", range.as_str()),
-                        FetchLocation::create(part_path.clone(), None, false).await?,
+                        FetchLocation::create(part_path.clone(), false).await?,
                         to.clone(),
                         extra.clone(),
                         attempts.clone(),

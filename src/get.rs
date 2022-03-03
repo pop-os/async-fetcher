@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -15,11 +14,7 @@ pub(crate) struct FetchLocation {
 }
 
 impl FetchLocation {
-    pub async fn create(
-        dest: Arc<Path>,
-        length: Option<u64>,
-        append: bool,
-    ) -> Result<Self, crate::Error> {
+    pub async fn create(dest: Arc<Path>, append: bool) -> Result<Self, crate::Error> {
         let mut builder = std::fs::OpenOptions::new();
 
         builder.create(true).write(true);
@@ -31,10 +26,6 @@ impl FetchLocation {
         }
 
         let file = builder.open(&dest).map_err(Error::FileCreate)?;
-
-        if let Some(length) = length {
-            file.set_len(length).map_err(Error::Write)?;
-        }
 
         Ok(Self { file, dest })
     }
@@ -54,7 +45,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
     let request = request.build().expect("failed to build request");
 
-    let task = async move {
+    let main = async move {
         let _token = match shutdown.delay_shutdown_token() {
             Ok(token) => token,
             Err(_) => return Err(Error::Canceled),
@@ -87,7 +78,6 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let fetch_loop = async {
             loop {
                 if shutdown.shutdown_started() || shutdown.shutdown_completed() {
-                    let _ = file.sync_all();
                     return Err(Error::Canceled);
                 }
 
@@ -97,23 +87,17 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                     futures::pin_mut!(reader);
 
                     let timed = crate::utils::run_timed(fetcher.timeout, reader);
-                    match crate::utils::network_interrupt(timed).await {
-                        Ok(chunk) => chunk,
-                        Err(why) => {
-                            let _ = file.sync_all();
-                            debug!("GET {} interrupted", dest.display());
-                            return Err(why);
-                        }
-                    }
+                    crate::utils::network_interrupt(timed).await?
                 };
 
                 match chunk {
                     Some(chunk) => {
                         let bytes = chunk.map_err(Error::Read)?;
 
+                        read_total += bytes.len();
+
                         file.write_all(&*bytes).map_err(Error::Write)?;
 
-                        read_total += bytes.len();
                         if now.elapsed().as_millis() > 500 {
                             update_progress(read_total);
 
@@ -130,9 +114,10 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             Ok(())
         };
 
-        let result = fetch_loop.await;
+        let fetch_result = fetch_loop.await;
+        let sync_result = file.sync_all().map_err(Error::Write);
 
-        let _ = file.sync_all();
+        let result = fetch_result.and(sync_result);
 
         if result.is_ok() && read_total != 0 {
             update_progress(read_total);
@@ -141,5 +126,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         result.map(|_| dest)
     };
 
-    tokio::spawn(task).await.unwrap()
+    tokio::task::spawn_blocking(|| futures::executor::block_on(main))
+        .await
+        .unwrap()
 }

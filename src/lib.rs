@@ -288,8 +288,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                 let result = task.await;
 
-                debug!("inner_request fetch result is {:?}", result);
-
                 if let Err(Error::NetworkChanged) | Err(Error::TimedOut) = result {
                     let mut attempts = 5;
                     while attempts != 0 {
@@ -461,7 +459,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let path = match crate::get(
             self.clone(),
             request,
-            FetchLocation::create(to.clone(), None, resume != 0).await?,
+            FetchLocation::create(to.clone(), resume != 0).await?,
             to.clone(),
             extra.clone(),
             attempts.clone(),
@@ -477,7 +475,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 crate::get(
                     self.clone(),
                     request,
-                    FetchLocation::create(to.clone(), None, resume != 0).await?,
+                    FetchLocation::create(to.clone(), resume != 0).await?,
                     to.clone(),
                     extra.clone(),
                     attempts,
