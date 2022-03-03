@@ -182,6 +182,12 @@ pub struct Fetcher<Data> {
     #[new(value = "2 * 1024 * 1024")]
     max_part_size: u32,
 
+    /// Time in ms between progress messages
+    /// # Note
+    /// Defaults to 500.
+    #[new(value = "500")]
+    progress_interval: u64,
+
     /// The time to wait between chunks before giving up.
     #[new(default)]
     #[setters(strip_option)]

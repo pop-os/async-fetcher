@@ -83,9 +83,6 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
                 let chunk = {
                     let reader = async { Ok(response.next().await) };
-
-                    futures::pin_mut!(reader);
-
                     let timed = crate::utils::run_timed(fetcher.timeout, reader);
                     crate::utils::network_interrupt(timed).await?
                 };
@@ -98,7 +95,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
                         file.write_all(&*bytes).map_err(Error::Write)?;
 
-                        if now.elapsed().as_millis() > 500 {
+                        if now.elapsed().as_millis() as u64 > fetcher.progress_interval {
                             update_progress(read_total);
 
                             now = Instant::now();
