@@ -170,6 +170,12 @@ pub struct Fetcher<Data> {
     #[new(value = "1")]
     connections_per_file: u16,
 
+    /// Configure the delay between file requests.
+    /// # Note
+    /// Defaults to no delay
+    #[new(value = "0")]
+    delay_between_requests: u64,
+
     /// The number of attempts to make when a request fails.
     /// # Note
     /// Defaults to 3 retries.
@@ -227,12 +233,16 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     ) -> Pin<Box<dyn Stream<Item = AsyncFetchOutput<Data>> + Send + 'static>> {
         let shutdown = self.shutdown.clone();
         let cancel_trigger = shutdown.wait_shutdown_triggered();
-
         // Takes input requests and converts them into a stream of fetch requests.
         let stream = inputs
             .map(move |(Source { dest, urls, part }, extra)| {
                 let fetcher = self.clone();
                 async move {
+                    if fetcher.delay_between_requests != 0 {
+                        let delay = Duration::from_millis(fetcher.delay_between_requests);
+                        tokio::time::sleep(delay).await;
+                    }
+
                     tokio::spawn(async move {
                         let _token = match fetcher.shutdown.delay_shutdown_token() {
                             Ok(token) => token,
