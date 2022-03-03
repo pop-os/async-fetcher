@@ -63,7 +63,7 @@ where
 
         let result = task.await;
 
-        let _ = dest.flush();
+        let _ = dest.sync_all();
 
         result
     });

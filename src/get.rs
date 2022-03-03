@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -19,13 +20,17 @@ impl FetchLocation {
         length: Option<u64>,
         append: bool,
     ) -> Result<Self, crate::Error> {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(append)
-            .truncate(!append)
-            .open(&dest)
-            .map_err(Error::FileCreate)?;
+        let mut builder = std::fs::OpenOptions::new();
+
+        builder.create(true).write(true);
+
+        if append {
+            builder.append(true);
+        } else {
+            builder.truncate(true);
+        }
+
+        let file = builder.open(&dest).map_err(Error::FileCreate)?;
 
         if let Some(length) = length {
             file.set_len(length).map_err(Error::Write)?;
@@ -60,7 +65,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let initial_response = crate::utils::network_interrupt(req).await?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
-            return Ok::<Arc<Path>, crate::Error>(dest);
+            return Ok::<_, crate::Error>(dest);
         }
 
         let mut response = validate(initial_response)?.bytes_stream();
@@ -82,7 +87,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let fetch_loop = async {
             loop {
                 if shutdown.shutdown_started() || shutdown.shutdown_completed() {
-                    let _ = file.flush();
+                    let _ = file.sync_all();
                     return Err(Error::Canceled);
                 }
 
@@ -95,7 +100,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                     match crate::utils::network_interrupt(timed).await {
                         Ok(chunk) => chunk,
                         Err(why) => {
-                            let _ = file.flush();
+                            let _ = file.sync_all();
                             debug!("GET {} interrupted", dest.display());
                             return Err(why);
                         }
@@ -127,7 +132,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
         let result = fetch_loop.await;
 
-        let _ = file.flush();
+        let _ = file.sync_all();
 
         if result.is_ok() && read_total != 0 {
             update_progress(read_total);
