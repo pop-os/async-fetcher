@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
-use std::io::Write;
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
@@ -37,7 +38,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     final_destination: Arc<Path>,
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
-) -> Result<Arc<Path>, crate::Error> {
+) -> Result<(Arc<Path>, File), crate::Error> {
     crate::utils::shutdown_check(&fetcher.shutdown)?;
 
     let shutdown = fetcher.shutdown.clone();
@@ -56,7 +57,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         let initial_response = crate::utils::network_interrupt(req).await?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
-            return Ok::<_, crate::Error>(dest);
+            return Ok::<_, crate::Error>((dest, file));
         }
 
         let mut response = validate(initial_response)?.bytes_stream();
@@ -113,14 +114,15 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
         let fetch_result = fetch_loop.await;
         let sync_result = file.sync_all().map_err(Error::Write);
+        let seek_result = file.seek(SeekFrom::Start(0)).map_err(Error::Write);
 
-        let result = fetch_result.and(sync_result);
+        let result = fetch_result.and(sync_result).and(seek_result);
 
         if result.is_ok() && read_total != 0 {
             update_progress(read_total);
         }
 
-        result.map(|_| dest)
+        result.map(|_| (dest, file))
     };
 
     tokio::task::spawn_blocking(|| futures::executor::block_on(main))

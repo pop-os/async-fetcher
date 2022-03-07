@@ -17,7 +17,7 @@ pub async fn concatenator<P: 'static>(
     shutdown: Shutdown,
 ) -> Result<(), Error>
 where
-    P: Stream<Item = Result<Arc<Path>, Error>> + Send + Unpin,
+    P: Stream<Item = Result<(Arc<Path>, File), Error>> + Send + Unpin,
 {
     let main = async move {
         let _token = match shutdown.delay_shutdown_token() {
@@ -26,33 +26,30 @@ where
         };
 
         let task = async {
-            let mut buffer = vec![0u8; 16 * 1024];
             let mut nth = 0;
             while let Some(task_result) = parts.next().await {
                 crate::utils::shutdown_check(&shutdown)?;
 
-                let part_path: Arc<Path> = task_result?;
+                let (source, mut source_file) = task_result?;
 
                 {
-                    let file = std::fs::File::open(&part_path).unwrap();
-                    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+                    let mut buffer = vec![0u8; 16 * 1024];
+                    let checksum = crate::checksum::generate_checksum::<md5::Md5, _>(
+                        &mut source_file,
+                        &mut buffer,
+                    )
+                    .unwrap();
 
-                    let checksum =
-                        crate::checksum::generate_checksum::<md5::Md5, _>(file, &mut buffer)
-                            .unwrap();
+                    use std::io::{Seek, SeekFrom};
 
-                    debug!(
-                        "CONCAT {}:{} {:X} {} bytes",
-                        path.display(),
-                        nth,
-                        checksum,
-                        len
-                    );
+                    source_file.seek(SeekFrom::Start(0)).unwrap();
+
+                    debug!("CONCAT {}:{} {:X}", path.display(), nth, checksum,);
 
                     nth += 1;
                 };
 
-                concatenate(&mut dest, part_path)?;
+                concatenate(&mut dest, source, &mut source_file)?;
 
                 crate::utils::shutdown_check(&shutdown)?;
             }
@@ -73,11 +70,12 @@ where
 }
 
 /// Concatenates a part into a file.
-fn concatenate(concatenated_file: &mut File, part_path: Arc<Path>) -> Result<(), Error> {
-    let mut file =
-        File::open(&*part_path).map_err(|why| Error::OpenPart(part_path.clone(), why))?;
-
-    copy(&mut file, concatenated_file).map_err(Error::Concatenate)?;
+fn concatenate(
+    concatenated_file: &mut File,
+    part_path: Arc<Path>,
+    part_file: &mut File,
+) -> Result<(), Error> {
+    copy(part_file, concatenated_file).map_err(Error::Concatenate)?;
 
     if let Err(why) = fs::remove_file(&*part_path) {
         error!("failed to remove part file ({:?}): {}", part_path, why);

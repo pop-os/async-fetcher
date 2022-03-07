@@ -482,13 +482,13 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         )
         .await
         {
-            Ok(path) => path,
+            Ok((path, _)) => path,
             Err(Error::Status(StatusCode::NOT_MODIFIED)) => to,
 
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
                 let request = self.client.get(&*uris[0]);
-                crate::get(
+                let (path, _) = crate::get(
                     self.clone(),
                     request,
                     FetchLocation::create(to.clone(), resume != 0).await?,
@@ -496,7 +496,9 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     extra.clone(),
                     attempts,
                 )
-                .await?
+                .await?;
+
+                path
             }
 
             Err(why) => return Err(why),
