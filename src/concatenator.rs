@@ -13,7 +13,7 @@ use std::{path::Path, sync::Arc};
 pub async fn concatenator<P: 'static>(
     mut dest: File,
     mut parts: P,
-    path: Arc<Path>,
+    _path: Arc<Path>,
     shutdown: Shutdown,
 ) -> Result<(), Error>
 where
@@ -26,35 +26,14 @@ where
         };
 
         let task = async {
-            let mut nth = 0;
             while let Some(task_result) = parts.next().await {
                 crate::utils::shutdown_check(&shutdown)?;
 
                 let (source, mut source_file) = task_result?;
-
-                {
-                    let mut buffer = vec![0u8; 16 * 1024];
-                    let checksum = crate::checksum::generate_checksum::<md5::Md5, _>(
-                        &mut source_file,
-                        &mut buffer,
-                    )
-                    .unwrap();
-
-                    use std::io::{Seek, SeekFrom};
-
-                    source_file.seek(SeekFrom::Start(0)).unwrap();
-
-                    debug!("CONCAT {}:{} {:X}", path.display(), nth, checksum,);
-
-                    nth += 1;
-                };
-
                 concatenate(&mut dest, source, &mut source_file)?;
-
-                crate::utils::shutdown_check(&shutdown)?;
             }
 
-            crate::utils::shutdown_check(&shutdown)
+            Ok(())
         };
 
         let result = task.await;
