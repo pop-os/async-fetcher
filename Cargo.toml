@@ -1,6 +1,6 @@
 [package]
 name = "async-fetcher"
-version = "0.8.0"
+version = "0.8.1"
 repository = "https://github.com/pop-os/async-fetcher"
 authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
 description = "Asynchronous multi-connection multi-download resumable HTTP file fetching state machine"
