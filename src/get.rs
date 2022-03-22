@@ -18,7 +18,7 @@ impl FetchLocation {
     pub async fn create(dest: Arc<Path>, append: bool) -> Result<Self, crate::Error> {
         let mut builder = std::fs::OpenOptions::new();
 
-        builder.create(true).write(true);
+        builder.create(true).write(true).read(true);
 
         if append {
             builder.append(true);
