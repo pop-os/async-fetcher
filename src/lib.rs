@@ -212,7 +212,12 @@ pub struct Fetcher<Data> {
 
 impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
-        Self::new(Client::new())
+        let client = Client::builder()
+            .pool_idle_timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap();
+
+        Self::new(client)
     }
 }
 
