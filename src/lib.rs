@@ -213,7 +213,8 @@ pub struct Fetcher<Data> {
 impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
         let client = Client::builder()
-            .pool_idle_timeout(std::time::Duration::from_secs(20))
+            .pool_idle_timeout(std::time::Duration::from_secs(10))
+            .pool_max_idle_per_host(0)
             .build()
             .unwrap();
 
@@ -339,25 +340,45 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         };
 
         let task = async {
-            if let Err(mut why) = fetch().await {
-                if let Error::Canceled = why {
-                    return Err(why);
+            let mut attempted = false;
+            loop {
+                if attempted {
+                    self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
                 }
 
-                while attempts.fetch_add(1, Ordering::SeqCst) < self.retries {
-                    remove_parts(&to).await;
-                    self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
-                    tokio::time::sleep(Duration::from_secs(3)).await;
+                attempted = true;
+                remove_parts(&to).await;
 
-                    if let Err(source) = fetch().await {
-                        why = source;
+                let error = match fetch().await {
+                    Ok(()) => return Ok(()),
+                    Err(error) => error,
+                };
+
+                if let Error::Canceled = error {
+                    return Err(error);
+                }
+
+                tokio::time::sleep(Duration::from_secs(3)).await;
+
+                // Uncondtionally retry connection errors.
+                if let Error::Client(ref error) = error {
+                    use std::error::Error;
+                    if let Some(source) = error.source() {
+                        if let Some(hyper) = source.downcast_ref::<hyper::Error>() {
+                            #[allow(deprecated)]
+                            if hyper.is_incomplete_message()
+                                || hyper.description() == "connection error"
+                            {
+                                continue;
+                            }
+                        }
                     }
                 }
 
-                return Err(why);
-            };
-
-            Ok(())
+                if attempts.fetch_add(1, Ordering::SeqCst) > self.retries {
+                    return Err(error);
+                }
+            }
         };
 
         let result = task.await;
