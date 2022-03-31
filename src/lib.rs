@@ -342,6 +342,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 while attempts.fetch_add(1, Ordering::SeqCst) < self.retries {
                     remove_parts(&to).await;
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::Retrying));
+                    tokio::time::sleep(Duration::from_secs(3)).await;
 
                     if let Err(source) = fetch().await {
                         why = source;
