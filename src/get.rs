@@ -113,10 +113,9 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         };
 
         let fetch_result = fetch_loop.await;
-        let sync_result = file.sync_all().map_err(Error::Write);
         let seek_result = file.seek(SeekFrom::Start(0)).map_err(Error::Write);
 
-        let result = fetch_result.and(sync_result).and(seek_result);
+        let result = fetch_result.and(seek_result);
 
         if result.is_ok() && read_total != 0 {
             update_progress(read_total);

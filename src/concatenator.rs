@@ -38,8 +38,6 @@ where
 
         let result = task.await;
 
-        let _ = dest.sync_all();
-
         result
     };
 
