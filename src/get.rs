@@ -54,7 +54,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
         let req = async { fetcher.client.execute(request).await.map_err(Error::from) };
 
-        let initial_response = crate::utils::network_interrupt(req).await?;
+        let initial_response = crate::utils::timed_interrupt(Duration::from_secs(3), req).await?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
             return Ok::<_, crate::Error>((dest, file));
@@ -82,11 +82,12 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                     return Err(Error::Canceled);
                 }
 
-                let chunk = {
-                    let reader = async { Ok(response.next().await) };
-                    let timed = crate::utils::run_timed(fetcher.timeout, reader);
-                    crate::utils::network_interrupt(timed).await?
-                };
+                let chunk = async { Ok(response.next().await) };
+
+                let chunk = match fetcher.timeout {
+                    Some(timeout) => crate::utils::timed_interrupt(timeout, chunk).await,
+                    None => crate::utils::network_interrupt(chunk).await,
+                }?;
 
                 match chunk {
                     Some(chunk) => {

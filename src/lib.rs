@@ -315,9 +315,9 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     while attempts != 0 {
                         tokio::time::sleep(Duration::from_secs(3)).await;
 
-                        let net_check = crate::utils::run_timed(
-                            Some(Duration::from_secs(3)),
-                            crate::utils::network_interrupt(head(&self.client, &uris[0])),
+                        let net_check = crate::utils::timed_interrupt(
+                            Duration::from_secs(3),
+                            head(&self.client, &uris[0]),
                         );
 
                         if net_check.await.is_ok() {
