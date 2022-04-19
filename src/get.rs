@@ -39,6 +39,8 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<(Arc<Path>, File), crate::Error> {
+    let client = (fetcher.client_instance)();
+
     crate::utils::shutdown_check(&fetcher.shutdown)?;
 
     let shutdown = fetcher.shutdown.clone();
@@ -52,7 +54,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             Err(_) => return Err(Error::Canceled),
         };
 
-        let req = async { fetcher.client.execute(request).await.map_err(Error::from) };
+        let req = async { client.execute(request).await.map_err(Error::from) };
 
         let initial_response = crate::utils::timed_interrupt(Duration::from_secs(3), req).await?;
 

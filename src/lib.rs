@@ -161,8 +161,10 @@ pub enum FetchEvent {
 /// as your network connection is unlikely to be faster than a single CPU core.
 #[derive(new, Setters)]
 pub struct Fetcher<Data> {
+    /// Creates an instance of a client. The caller can decide if the instance
+    /// is shared or unique.
     #[setters(skip)]
-    client: Client,
+    client_instance: Box<dyn Fn() -> Client + Send + Sync + 'static>,
 
     /// The number of concurrent connections to sustain per file being fetched.
     /// # Note
@@ -212,13 +214,7 @@ pub struct Fetcher<Data> {
 
 impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
-        let client = Client::builder()
-            .pool_idle_timeout(std::time::Duration::from_secs(10))
-            .pool_max_idle_per_host(0)
-            .build()
-            .unwrap();
-
-        Self::new(client)
+        Self::new(Box::new(Client::new))
     }
 }
 
@@ -293,6 +289,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         to: Arc<Path>,
         extra: Arc<Data>,
     ) -> Result<(), Error> {
+        let client = (self.client_instance)();
+
         self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetching));
 
         remove_parts(&to).await;
@@ -302,6 +300,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let fetch = || async {
             loop {
                 let task = self.clone().inner_request(
+                    &client,
                     uris.clone(),
                     to.clone(),
                     extra.clone(),
@@ -317,7 +316,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                         let net_check = crate::utils::timed_interrupt(
                             Duration::from_secs(3),
-                            head(&self.client, &uris[0]),
+                            head(&client, &uris[0]),
                         );
 
                         if net_check.await.is_ok() {
@@ -394,6 +393,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
     async fn inner_request(
         self: Arc<Self>,
+        client: &Client,
         uris: Arc<[Box<str>]>,
         to: Arc<Path>,
         extra: Arc<Data>,
@@ -403,7 +403,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let mut modified = None;
         let mut resume = 0;
 
-        let head_response = head(&self.client, &*uris[0]).await?;
+        let head_response = head(client, &*uris[0]).await?;
 
         if let Some(response) = head_response.as_ref() {
             length = response.content_length();
@@ -448,7 +448,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         // If set, this will use multiple connections to download a file in parts.
         if self.connections_per_file > 1 {
             if let Some(length) = length {
-                if supports_range(&self.client, &*uris[0], resume, Some(length)).await? {
+                if supports_range(client, &*uris[0], resume, Some(length)).await? {
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::ContentLength(length)));
 
                     if resume != 0 {
@@ -488,10 +488,10 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             }
         }
 
-        let mut request = self.client.get(&*uris[0]);
+        let mut request = client.get(&*uris[0]);
 
         if resume != 0 {
-            if let Ok(true) = supports_range(&self.client, &*uris[0], resume, length).await {
+            if let Ok(true) = supports_range(client, &*uris[0], resume, length).await {
                 request = request.header("Range", range::to_string(resume, length));
                 self.send(|| (to.clone(), extra.clone(), FetchEvent::Progress(resume)));
             } else {
@@ -514,7 +514,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
-                let request = self.client.get(&*uris[0]);
+                let request = client.get(&*uris[0]);
                 let (path, _) = crate::get(
                     self.clone(),
                     request,
