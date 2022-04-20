@@ -142,8 +142,6 @@ impl From<isahc::Error> for Error {
 /// Events which are submitted by the fetcher.
 #[derive(Debug)]
 pub enum FetchEvent {
-    /// Signals that this file was already fetched.
-    AlreadyFetched,
     /// States that we know the length of the file being fetched.
     ContentLength(u64),
     /// Notifies that the file has been fetched.
@@ -356,7 +354,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 remove_parts(&to).await;
 
                 let error = match fetch().await {
-                    Ok(already_fetched) => return Ok(already_fetched),
+                    Ok(()) => return Ok(()),
                     Err(error) => error,
                 };
 
@@ -392,18 +390,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         remove_parts(&to).await;
 
         match result {
-            Ok(already_fetched) => {
-                self.send(|| {
-                    (
-                        to.clone(),
-                        extra.clone(),
-                        if already_fetched {
-                            FetchEvent::AlreadyFetched
-                        } else {
-                            FetchEvent::Fetched
-                        },
-                    )
-                });
+            Ok(()) => {
+                self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
 
                 Ok(())
             }
@@ -418,7 +406,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         to: Arc<Path>,
         extra: Arc<Data>,
         attempts: Arc<AtomicU16>,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         let mut length = None;
         let mut modified = None;
         let mut resume = 0;
@@ -443,7 +431,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         if metadata.len() == length {
                             if ts.as_secs() == date_as_timestamp(last_modified) {
                                 info!("already fetched {}", to.display());
-                                return Ok(true);
+                                return Ok(());
                             } else {
                                 error!("removing file with outdated timestamp: {:?}", to);
                                 let _ = fs::remove_file(to.as_ref())
@@ -494,7 +482,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         update_modified(&to, modified)?;
                     }
 
-                    return Ok(false);
+                    return Ok(());
                 }
             }
         }
@@ -554,7 +542,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             update_modified(&path, modified)?;
         }
 
-        Ok(false)
+        Ok(())
     }
 
     fn send(&self, event: impl FnOnce() -> (Arc<Path>, Arc<Data>, FetchEvent)) {

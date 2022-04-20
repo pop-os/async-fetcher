@@ -38,10 +38,6 @@ pub async fn run(
                     }
                 }
 
-                FetchEvent::AlreadyFetched => {
-                    Output(fomat!((dest.display())), OutputEvent::AlreadyFetched)
-                }
-
                 FetchEvent::ContentLength(length) => {
                     state
                         .entry(dest.clone())

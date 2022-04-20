@@ -39,12 +39,6 @@ pub async fn run(
                         }
                     }
 
-                    FetchEvent::AlreadyFetched => {
-                        if let Some(mut bar) = state.remove(&dest) {
-                            bar.finish_print(&fomat!("Already fetched "(dest.display())));
-                        }
-                    }
-
                     FetchEvent::ContentLength(total) => {
                         state
                             .entry(dest.clone())

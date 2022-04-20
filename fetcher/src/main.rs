@@ -71,8 +71,8 @@ async fn fetcher_stream<
     let fetcher = Fetcher::default()
         // Add a handle to the shutdown mechanism used by this application.
         .shutdown(crate::shutdown_handle().clone())
-        // Fetch each file in parts, using up to 4 concurrent connections per file
-        .connections_per_file(4)
+        // Fetch each file in parts, using up to 2 concurrent connections per file
+        .connections_per_file(2)
         // Pass in the event sender which events will be sent to
         .events(event_sender)
         // Configure a timeout to bail when a connection stalls for too long
