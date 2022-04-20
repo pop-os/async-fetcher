@@ -217,7 +217,14 @@ impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
         use isahc::config::Configurable;
         let client = Client::builder()
+            // Follow up to 10 redirect links
             .redirect_policy(RedirectPolicy::Limit(10))
+            // Cache DNS records for 24 hours
+            .dns_cache(Duration::from_secs(60 * 60 * 24))
+            // Keep a TCP connection alive for up to 90s
+            .tcp_keepalive(Duration::from_secs(90))
+            // Allow the server to be eager about sending packets
+            .tcp_nodelay()
             .build()
             .expect("failed to create HTTP Client");
 
