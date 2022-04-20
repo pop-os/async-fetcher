@@ -52,9 +52,15 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             Err(_) => return Err(Error::Canceled),
         };
 
-        let req = async { fetcher.client.send_async(request).await.map_err(Error::from) };
+        let req = async {
+            fetcher
+                .client
+                .send_async(request)
+                .await
+                .map_err(Error::from)
+        };
 
-        let initial_response = crate::utils::timed_interrupt(Duration::from_secs(3), req).await?;
+        let initial_response = crate::utils::timed_interrupt(Duration::from_secs(10), req).await?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
             return Ok::<_, crate::Error>((dest, file));
