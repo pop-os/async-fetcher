@@ -357,7 +357,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 remove_parts(&to).await;
 
                 let error = match fetch().await {
-                    Ok(()) => return Ok(()),
+                    Ok(already_fetched) => return Ok(already_fetched),
                     Err(error) => error,
                 };
 
@@ -392,11 +392,24 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         remove_parts(&to).await;
 
-        if result.is_ok() {
-            self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetched));
-        }
+        match result {
+            Ok(already_fetched) => {
+                self.send(|| {
+                    (
+                        to.clone(),
+                        extra.clone(),
+                        if already_fetched {
+                            FetchEvent::AlreadyFetched
+                        } else {
+                            FetchEvent::Fetched
+                        },
+                    )
+                });
 
-        result
+                Ok(())
+            }
+            Err(why) => Err(why),
+        }
     }
 
     async fn inner_request(
@@ -406,7 +419,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         to: Arc<Path>,
         extra: Arc<Data>,
         attempts: Arc<AtomicU16>,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let mut length = None;
         let mut modified = None;
         let mut resume = 0;
@@ -431,8 +444,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         if metadata.len() == length {
                             if ts.as_secs() == date_as_timestamp(last_modified) {
                                 info!("already fetched {}", to.display());
-                                self.send(|| (to, extra.clone(), FetchEvent::AlreadyFetched));
-                                return Ok(());
+                                return Ok(true);
                             } else {
                                 error!("removing file with outdated timestamp: {:?}", to);
                                 let _ = fs::remove_file(to.as_ref())
@@ -483,7 +495,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         update_modified(&to, modified)?;
                     }
 
-                    return Ok(());
+                    return Ok(false);
                 }
             }
         }
@@ -543,7 +555,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             update_modified(&path, modified)?;
         }
 
-        Ok(())
+        Ok(false)
     }
 
     fn send(&self, event: impl FnOnce() -> (Arc<Path>, Arc<Data>, FetchEvent)) {
