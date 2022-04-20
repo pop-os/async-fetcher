@@ -220,7 +220,6 @@ impl<Data> Default for Fetcher<Data> {
         use isahc::config::Configurable;
         let client = Client::builder()
             .redirect_policy(RedirectPolicy::Limit(10))
-            .tcp_nodelay()
             .build()
             .expect("failed to create HTTP Client");
 
