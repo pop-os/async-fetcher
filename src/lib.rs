@@ -72,8 +72,8 @@ use futures::{
 use http::Request;
 use http::StatusCode;
 use httpdate::HttpDate;
-use isahc::AsyncBody;
 use isahc::config::RedirectPolicy;
+use isahc::AsyncBody;
 use isahc::{HttpClient as Client, Response};
 use numtoa::NumToA;
 use std::sync::atomic::Ordering;
@@ -373,11 +373,14 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     if let Some(source) = error.source() {
                         if let Some(error) = source.downcast_ref::<isahc::Error>() {
                             if error.is_network() {
+                                error!("retrying due to connection error: {}", error);
                                 continue;
                             }
                         }
                     }
                 }
+
+                error!("retrying after error encountered: {}", error);
 
                 if attempts.fetch_add(1, Ordering::SeqCst) > self.retries {
                     return Err(error);
