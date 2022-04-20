@@ -33,20 +33,18 @@ impl FetchLocation {
 }
 pub(crate) async fn get<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
-    request: reqwest::RequestBuilder,
+    request: http::request::Builder,
     file: FetchLocation,
     final_destination: Arc<Path>,
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
 ) -> Result<(Arc<Path>, File), crate::Error> {
-    let client = (fetcher.client_instance)();
-
     crate::utils::shutdown_check(&fetcher.shutdown)?;
 
     let shutdown = fetcher.shutdown.clone();
     let FetchLocation { mut file, dest } = file;
 
-    let request = request.build().expect("failed to build request");
+    let request = request.body(()).expect("failed to build request");
 
     let main = async move {
         let _token = match shutdown.delay_shutdown_token() {
@@ -54,7 +52,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             Err(_) => return Err(Error::Canceled),
         };
 
-        let req = async { client.execute(request).await.map_err(Error::from) };
+        let req = async { fetcher.client.send_async(request).await.map_err(Error::from) };
 
         let initial_response = crate::utils::timed_interrupt(Duration::from_secs(3), req).await?;
 
@@ -62,7 +60,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             return Ok::<_, crate::Error>((dest, file));
         }
 
-        let mut response = validate(initial_response)?.bytes_stream();
+        let mut response = validate(initial_response)?.into_body();
 
         let mut read_total = 0;
 
@@ -78,35 +76,34 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             });
         };
 
+        let mut buffer = vec![0u8; 8192];
+
         let fetch_loop = async {
             loop {
                 if shutdown.shutdown_started() || shutdown.shutdown_completed() {
                     return Err(Error::Canceled);
                 }
 
-                let chunk = async { Ok(response.next().await) };
+                let bytes_read = async { response.read(&mut buffer).await.map_err(Error::Read) };
 
-                let chunk = match fetcher.timeout {
-                    Some(timeout) => crate::utils::timed_interrupt(timeout, chunk).await,
-                    None => crate::utils::network_interrupt(chunk).await,
+                let read = match fetcher.timeout {
+                    Some(timeout) => crate::utils::timed_interrupt(timeout, bytes_read).await,
+                    None => crate::utils::network_interrupt(bytes_read).await,
                 }?;
 
-                match chunk {
-                    Some(chunk) => {
-                        let bytes = chunk.map_err(Error::Read)?;
+                if read == 0 {
+                    break;
+                }
 
-                        read_total += bytes.len();
+                read_total += read;
 
-                        file.write_all(&*bytes).map_err(Error::Write)?;
+                file.write_all(&buffer[..read]).map_err(Error::Write)?;
 
-                        if now.elapsed().as_millis() as u64 > fetcher.progress_interval {
-                            update_progress(read_total);
+                if now.elapsed().as_millis() as u64 > fetcher.progress_interval {
+                    update_progress(read_total);
 
-                            now = Instant::now();
-                            read_total = 0;
-                        }
-                    }
-                    None => break,
+                    now = Instant::now();
+                    read_total = 0;
                 }
 
                 attempts.store(0, Ordering::SeqCst);

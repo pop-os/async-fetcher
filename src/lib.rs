@@ -69,10 +69,13 @@ use futures::{
     prelude::*,
     stream::{self, StreamExt},
 };
+use http::Request;
 use http::StatusCode;
 use httpdate::HttpDate;
+use isahc::AsyncBody;
+use isahc::config::RedirectPolicy;
+use isahc::{HttpClient as Client, Response};
 use numtoa::NumToA;
-use reqwest::{Client, Response};
 use std::sync::atomic::Ordering;
 use std::{
     fmt::Debug,
@@ -97,7 +100,7 @@ pub enum Error {
     #[error("task was canceled")]
     Canceled,
     #[error("http client error")]
-    Client(#[source] reqwest::Error),
+    Client(#[source] isahc::Error),
     #[error("unable to concatenate fetched parts")]
     Concatenate(#[source] io::Error),
     #[error("unable to create file")]
@@ -120,8 +123,8 @@ pub enum Error {
     TimedOut,
     #[error("error writing to file")]
     Write(#[source] io::Error),
-    #[error("fetch error")]
-    Read(#[source] reqwest::Error),
+    #[error("network input error")]
+    Read(#[source] io::Error),
     #[error("failed to rename partial to destination")]
     Rename(#[source] io::Error),
     #[error("server responded with an error: {}", _0)]
@@ -130,8 +133,8 @@ pub enum Error {
     TokioSpawn(#[source] tokio::task::JoinError),
 }
 
-impl From<reqwest::Error> for Error {
-    fn from(e: reqwest::Error) -> Self {
+impl From<isahc::Error> for Error {
+    fn from(e: isahc::Error) -> Self {
         Self::Client(e)
     }
 }
@@ -164,7 +167,7 @@ pub struct Fetcher<Data> {
     /// Creates an instance of a client. The caller can decide if the instance
     /// is shared or unique.
     #[setters(skip)]
-    client_instance: Box<dyn Fn() -> Client + Send + Sync + 'static>,
+    client: Client,
 
     /// The number of concurrent connections to sustain per file being fetched.
     /// # Note
@@ -214,7 +217,14 @@ pub struct Fetcher<Data> {
 
 impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
-        Self::new(Box::new(Client::new))
+        use isahc::config::Configurable;
+        let client = Client::builder()
+            .redirect_policy(RedirectPolicy::Limit(10))
+            .tcp_nodelay()
+            .build()
+            .expect("failed to create HTTP Client");
+
+        Self::new(client)
     }
 }
 
@@ -289,8 +299,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         to: Arc<Path>,
         extra: Arc<Data>,
     ) -> Result<(), Error> {
-        let client = (self.client_instance)();
-
         self.send(|| (to.clone(), extra.clone(), FetchEvent::Fetching));
 
         remove_parts(&to).await;
@@ -300,7 +308,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let fetch = || async {
             loop {
                 let task = self.clone().inner_request(
-                    &client,
+                    &self.client,
                     uris.clone(),
                     to.clone(),
                     extra.clone(),
@@ -316,7 +324,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
                         let net_check = crate::utils::timed_interrupt(
                             Duration::from_secs(3),
-                            head(&client, &uris[0]),
+                            head(&self.client, &uris[0]),
                         );
 
                         if net_check.await.is_ok() {
@@ -363,11 +371,8 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 if let Error::Client(ref error) = error {
                     use std::error::Error;
                     if let Some(source) = error.source() {
-                        if let Some(hyper) = source.downcast_ref::<hyper::Error>() {
-                            #[allow(deprecated)]
-                            if hyper.is_incomplete_message()
-                                || hyper.description() == "connection error"
-                            {
+                        if let Some(error) = source.downcast_ref::<isahc::Error>() {
+                            if error.is_network() {
                                 continue;
                             }
                         }
@@ -488,7 +493,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             }
         }
 
-        let mut request = client.get(&*uris[0]);
+        let mut request = Request::get(&*uris[0]);
 
         if resume != 0 {
             if let Ok(true) = supports_range(client, &*uris[0], resume, length).await {
@@ -514,7 +519,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
-                let request = client.get(&*uris[0]);
+                let request = Request::get(&*uris[0]);
                 let (path, _) = crate::get(
                     self.clone(),
                     request,
@@ -545,10 +550,10 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     }
 }
 
-async fn head(client: &Client, uri: &str) -> Result<Option<Response>, Error> {
-    let request = client.get(uri).build().unwrap();
+async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBody>>, Error> {
+    let request = Request::get(uri).body(()).unwrap();
 
-    match validate(client.execute(request).await?).map(Some) {
+    match validate(client.send_async(request).await?).map(Some) {
         result @ Ok(_) => result,
         Err(Error::Status(StatusCode::NOT_MODIFIED))
         | Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
@@ -562,13 +567,12 @@ async fn supports_range(
     resume: u64,
     length: Option<u64>,
 ) -> Result<bool, Error> {
-    let request = client
-        .head(uri)
+    let request = Request::head(uri)
         .header("Range", range::to_string(resume, length).as_str())
-        .build()
+        .body(())
         .unwrap();
 
-    let response = client.execute(request).await?;
+    let response = client.send_async(request).await?;
 
     if response.status() == StatusCode::PARTIAL_CONTENT {
         if let Some(header) = response.headers().get("Content-Range") {
@@ -585,7 +589,7 @@ async fn supports_range(
     }
 }
 
-fn validate(response: Response) -> Result<Response, Error> {
+fn validate(response: Response<AsyncBody>) -> Result<Response<AsyncBody>, Error> {
     let status = response.status();
 
     if status.is_informational() || status.is_success() {
@@ -600,7 +604,7 @@ trait ResponseExt {
     fn last_modified(&self) -> Option<HttpDate>;
 }
 
-impl ResponseExt for Response {
+impl<T> ResponseExt for Response<T> {
     fn content_length(&self) -> Option<u64> {
         let header = self.headers().get("content-length")?;
         header.to_str().ok()?.parse::<u64>().ok()
