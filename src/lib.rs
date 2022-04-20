@@ -560,7 +560,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 }
 
 async fn head(client: &Client, uri: &str) -> Result<Option<Response<AsyncBody>>, Error> {
-    let request = Request::get(uri).body(()).unwrap();
+    let request = Request::head(uri).body(()).unwrap();
 
     match validate(client.send_async(request).await?).map(Some) {
         result @ Ok(_) => result,
