@@ -33,7 +33,8 @@ impl FetchLocation {
 }
 pub(crate) async fn get<Data: Send + Sync + 'static>(
     fetcher: Arc<Fetcher<Data>>,
-    request: http::request::Builder,
+    #[cfg(feature = "isahc")] request: http::request::Builder,
+    #[cfg(feature = "reqwest")] request: reqwest::RequestBuilder,
     file: FetchLocation,
     final_destination: Arc<Path>,
     extra: Arc<Data>,
@@ -44,7 +45,11 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
     let shutdown = fetcher.shutdown.clone();
     let FetchLocation { mut file, dest } = file;
 
+    #[cfg(feature = "isahc")]
     let request = request.body(()).expect("failed to build request");
+
+    #[cfg(feature = "reqwest")]
+    let request = request.build().expect("failed to build request");
 
     let main = async move {
         let _token = match shutdown.delay_shutdown_token() {
@@ -52,6 +57,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
             Err(_) => return Err(Error::Canceled),
         };
 
+        #[cfg(feature = "isahc")]
         let req = async {
             fetcher
                 .client
@@ -60,13 +66,23 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                 .map_err(Error::from)
         };
 
+        #[cfg(feature = "reqwest")]
+        let req = async { fetcher.client.execute(request).await.map_err(Error::from) };
+
         let initial_response = crate::utils::timed_interrupt(Duration::from_secs(10), req).await?;
 
         if initial_response.status() == StatusCode::NOT_MODIFIED {
             return Ok::<_, crate::Error>((dest, file));
         }
 
+        #[cfg(feature = "isahc")]
         let mut response = validate(initial_response)?.into_body();
+
+        #[cfg(feature = "reqwest")]
+        let mut response = validate(initial_response)?
+            .bytes_stream()
+            .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
+            .into_async_read();
 
         let mut read_total = 0;
 
