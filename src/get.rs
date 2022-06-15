@@ -51,6 +51,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         };
 
         match &fetcher.client {
+            #[cfg(feature = "isahc")]
             Client::Isahc(client) => {
                 // If no extra features are enabled this if-let is useless
                 #[allow(irrefutable_let_patterns)]
@@ -84,7 +85,9 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
                 }
             }
             #[cfg(feature = "reqwest")]
-            Client::Reqwest(client) => {
+            Client::Reqwest(client) =>
+            {
+                #[allow(irrefutable_let_patterns)]
                 if let RequestBuilder::Reqwest(request) = request {
                     let request = request.build().expect("failed to build request");
 

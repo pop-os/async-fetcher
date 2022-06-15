@@ -49,6 +49,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                 let attempts = attempts.clone();
 
                 let builder = match &fetcher.client {
+                    #[cfg(feature = "isahc")]
                     Client::Isahc(_) => RequestBuilder::Http(HttpRequest::get(&*uri)),
                     #[cfg(feature = "reqwest")]
                     Client::Reqwest(client) => RequestBuilder::Reqwest(client.get(&*uri)),
@@ -59,6 +60,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                     let part_path: Arc<Path> = Arc::from(part_path);
 
                     let request = match builder {
+                        #[cfg(feature = "isahc")]
                         RequestBuilder::Http(inner) => {
                             RequestBuilder::Http(inner.header("range", range.as_str()))
                         }
