@@ -48,13 +48,31 @@ pub async fn get_many<Data: Send + Sync + 'static>(
                 let extra = extra.clone();
                 let attempts = attempts.clone();
 
+                let builder = match &fetcher.client {
+                    #[cfg(feature = "isahc")]
+                    Client::Isahc(_) => RequestBuilder::Http(HttpRequest::get(&*uri)),
+                    #[cfg(feature = "reqwest")]
+                    Client::Reqwest(client) => RequestBuilder::Reqwest(client.get(&*uri)),
+                };
+
                 async move {
                     let range = range::to_string(range_start, Some(range_end));
                     let part_path: Arc<Path> = Arc::from(part_path);
 
+                    let request = match builder {
+                        #[cfg(feature = "isahc")]
+                        RequestBuilder::Http(inner) => {
+                            RequestBuilder::Http(inner.header("range", range.as_str()))
+                        }
+                        #[cfg(feature = "reqwest")]
+                        RequestBuilder::Reqwest(inner) => {
+                            RequestBuilder::Reqwest(inner.header("range", range.as_str()))
+                        }
+                    };
+
                     crate::get(
                         fetcher.clone(),
-                        Request::get(&*uri).header("range", range.as_str()),
+                        request,
                         FetchLocation::create(part_path.clone(), false).await?,
                         to.clone(),
                         extra.clone(),
