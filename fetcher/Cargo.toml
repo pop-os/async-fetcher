@@ -1,12 +1,12 @@
 [package]
 name = "fetcher"
-version = "0.8.0"
+version = "0.10.0"
 authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
 edition = "2018"
 license = "MPL-2.0"
 
 [dependencies]
-async-fetcher = { path = "../" }
+async-fetcher = { path = "../", features = ["reqwest"] }
 atty = "0.2.14"
 better-panic = "0.3.0"
 fomat-macros = "0.3.1"
