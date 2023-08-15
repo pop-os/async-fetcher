@@ -523,7 +523,11 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 let head_response = head_reqwest(client, &*uris[0]).await?;
 
                 if let Some(response) = head_response.as_ref() {
-                    length = response.content_length();
+                    length = response
+                            .headers()
+                            .get(reqwest::header::CONTENT_LENGTH)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(|value| value.parse().ok());
                     modified = response.last_modified();
                 }
             }
