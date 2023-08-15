@@ -51,7 +51,7 @@ impl Decoder for Inputs {
 
                 return value.map(Some).map_err(|source| InputError::Decoder {
                     input: String::from_utf8_lossy(src).into_owned().into(),
-                    source,
+                    source: source.into(),
                 });
             }
         }
