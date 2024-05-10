@@ -3,7 +3,7 @@
 
 use crate::Error;
 
-use async_shutdown::Shutdown;
+use async_shutdown::ShutdownManager;
 use futures::{Stream, StreamExt};
 use std::fs::{self, File};
 use std::io::copy;
@@ -14,7 +14,7 @@ pub async fn concatenator<P: 'static>(
     mut dest: File,
     mut parts: P,
     _path: Arc<Path>,
-    shutdown: Shutdown,
+    shutdown: ShutdownManager<()>,
 ) -> Result<(), Error>
 where
     P: Stream<Item = Result<(Arc<Path>, File), Error>> + Send + Unpin,

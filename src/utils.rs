@@ -42,8 +42,8 @@ where
     select(timeout, future).await.factor_first().0
 }
 
-pub fn shutdown_check(shutdown: &async_shutdown::Shutdown) -> Result<(), crate::Error> {
-    if shutdown.shutdown_started() || shutdown.shutdown_completed() {
+pub fn shutdown_check(shutdown: &async_shutdown::ShutdownManager<()>) -> Result<(), crate::Error> {
+    if shutdown.is_shutdown_triggered() || shutdown.is_shutdown_completed() {
         return Err(Error::Canceled);
     }
 

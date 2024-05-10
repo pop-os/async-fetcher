@@ -13,7 +13,7 @@
 //! ```
 //! let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
 //!
-//! let shutdown = async_shutdown::Shutdown::new();
+//! let shutdown = async_shutdown::ShutdownManager::new();
 //!
 //! let results_stream = Fetcher::default()
 //!     // Define a max number of ranged connections per file.
@@ -64,26 +64,16 @@ pub use self::source::*;
 use self::get::{get, FetchLocation};
 use self::get_many::get_many;
 use self::time::{date_as_timestamp, update_modified};
-use async_shutdown::Shutdown;
+use async_shutdown::ShutdownManager;
 use futures::{
     prelude::*,
     stream::{self, StreamExt},
 };
 
 use http::StatusCode;
-#[cfg(feature = "isahc")]
-use http::{request::Builder as HttpBuilder, Request as HttpRequest};
 use httpdate::HttpDate;
-#[cfg(feature = "isahc")]
-use isahc::config::RedirectPolicy;
-#[cfg(feature = "isahc")]
-use isahc::AsyncBody;
-#[cfg(feature = "isahc")]
-use isahc::{HttpClient as IsahcClient, Response as IsahcResponse};
 use numtoa::NumToA;
-#[cfg(feature = "reqwest")]
 use reqwest::redirect::Policy;
-#[cfg(feature = "reqwest")]
 use reqwest::{
     Client as ReqwestClient, RequestBuilder as ReqwestBuilder, Response as ReqwestResponse,
 };
@@ -111,10 +101,6 @@ pub type EventSender<Data> = mpsc::UnboundedSender<(Arc<Path>, Data, FetchEvent)
 pub enum Error {
     #[error("task was canceled")]
     Canceled,
-    #[cfg(feature = "isahc")]
-    #[error("http client error")]
-    IsahcClient(#[source] isahc::Error),
-    #[cfg(feature = "reqwest")]
     #[error("http client error")]
     ReqwestClient(#[source] reqwest::Error),
     #[error("unable to concatenate fetched parts")]
@@ -151,14 +137,6 @@ pub enum Error {
     InvalidGetRequestBuilder,
 }
 
-#[cfg(feature = "isahc")]
-impl From<isahc::Error> for Error {
-    fn from(e: isahc::Error) -> Self {
-        Self::IsahcClient(e)
-    }
-}
-
-#[cfg(feature = "reqwest")]
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
         Self::ReqwestClient(e)
@@ -235,61 +213,34 @@ pub struct Fetcher<Data> {
     events: Option<Arc<EventSender<Arc<Data>>>>,
 
     /// Utilized to know when to shut down the fetching process.
-    #[new(value = "Shutdown::new()")]
-    shutdown: Shutdown,
+    #[new(value = "ShutdownManager::new()")]
+    shutdown: ShutdownManager<()>,
 }
 
 /// The underlying Client used for the Fetcher
 pub enum Client {
-    #[cfg(feature = "isahc")]
-    Isahc(IsahcClient),
-    #[cfg(feature = "reqwest")]
     Reqwest(ReqwestClient),
 }
 
 pub(crate) enum RequestBuilder {
-    #[cfg(feature = "isahc")]
-    Http(HttpBuilder),
-    #[cfg(feature = "reqwest")]
     Reqwest(ReqwestBuilder),
 }
 
 impl<Data> Default for Fetcher<Data> {
     fn default() -> Self {
-        #[cfg(feature = "isahc")]
-        {
-            use isahc::config::Configurable;
-            let client = IsahcClient::builder()
-                // Keep a TCP connection alive for up to 90s
-                .tcp_keepalive(Duration::from_secs(90))
-                // Follow up to 10 redirect links
-                .redirect_policy(RedirectPolicy::Limit(10))
-                // Allow the server to be eager about sending packets
-                .tcp_nodelay()
-                // Cache DNS records for 24 hours
-                .dns_cache(Duration::from_secs(60 * 60 * 24))
-                .build()
-                .expect("failed to create HTTP Client");
+        let client = ReqwestClient::builder()
+            // Keep a TCP connection alive for up to 90s
+            .tcp_keepalive(Duration::from_secs(90))
+            // Follow up to 10 redirect links
+            .redirect(Policy::limited(10))
+            // Allow the server to be eager about sending packets
+            .tcp_nodelay(true)
+            // Cache DNS records for 24 hours
+            // .dns_cache(Duration::from_secs(60 * 60 * 24))
+            .build()
+            .expect("failed to create HTTP Client");
 
-            Self::new(Client::Isahc(client))
-        }
-
-        #[cfg(feature = "reqwest")]
-        {
-            let client = ReqwestClient::builder()
-                // Keep a TCP connection alive for up to 90s
-                .tcp_keepalive(Duration::from_secs(90))
-                // Follow up to 10 redirect links
-                .redirect(Policy::limited(10))
-                // Allow the server to be eager about sending packets
-                .tcp_nodelay(true)
-                // Cache DNS records for 24 hours
-                // .dns_cache(Duration::from_secs(60 * 60 * 24))
-                .build()
-                .expect("failed to create HTTP Client");
-
-            Self::new(Client::Reqwest(client))
-        }
+        Self::new(Client::Reqwest(client))
     }
 }
 
@@ -388,18 +339,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                         tokio::time::sleep(Duration::from_secs(3)).await;
 
                         match &self.client {
-                            #[cfg(feature = "isahc")]
-                            Client::Isahc(client) => {
-                                let future = head_isahc(client, &uris[0]);
-                                let net_check =
-                                    crate::utils::timed_interrupt(Duration::from_secs(3), future);
-
-                                if net_check.await.is_ok() {
-                                    tokio::time::sleep(Duration::from_secs(3)).await;
-                                    break;
-                                }
-                            }
-                            #[cfg(feature = "reqwest")]
                             Client::Reqwest(client) => {
                                 let future = head_reqwest(client, &uris[0]);
                                 let net_check =
@@ -448,20 +387,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                 tokio::time::sleep(Duration::from_secs(3)).await;
 
                 // Uncondtionally retry connection errors.
-                #[cfg(feature = "isahc")]
-                if let Error::IsahcClient(ref error) = error {
-                    use std::error::Error;
-                    if let Some(source) = error.source() {
-                        if let Some(error) = source.downcast_ref::<isahc::Error>() {
-                            if error.is_network() {
-                                error!("retrying due to connection error: {}", error);
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                #[cfg(feature = "reqwest")]
                 if let Error::ReqwestClient(ref error) = error {
                     use std::error::Error;
                     if let Some(source) = error.source() {
@@ -509,25 +434,15 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         let mut resume = 0;
 
         match client {
-            #[cfg(feature = "isahc")]
-            Client::Isahc(client) => {
-                let head_response = head_isahc(client, &*uris[0]).await?;
-
-                if let Some(response) = head_response.as_ref() {
-                    length = response.content_length();
-                    modified = response.last_modified();
-                }
-            }
-            #[cfg(feature = "reqwest")]
             Client::Reqwest(client) => {
                 let head_response = head_reqwest(client, &*uris[0]).await?;
 
                 if let Some(response) = head_response.as_ref() {
                     length = response
-                            .headers()
-                            .get(reqwest::header::CONTENT_LENGTH)
-                            .and_then(|value| value.to_str().ok())
-                            .and_then(|value| value.parse().ok());
+                        .headers()
+                        .get(reqwest::header::CONTENT_LENGTH)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse().ok());
                     modified = response.last_modified();
                 }
             }
@@ -611,22 +526,12 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         }
 
         let mut request = match client {
-            #[cfg(feature = "isahc")]
-            Client::Isahc(_) => RequestBuilder::Http(HttpRequest::get(&*uris[0])),
-            #[cfg(feature = "reqwest")]
             Client::Reqwest(client) => RequestBuilder::Reqwest(client.get(&*uris[0])),
         };
 
         if resume != 0 {
             if let Ok(true) = supports_range(client, &*uris[0], resume, length).await {
                 match request {
-                    #[cfg(feature = "isahc")]
-                    RequestBuilder::Http(inner) => {
-                        request = RequestBuilder::Http(
-                            inner.header("Range", range::to_string(resume, length)),
-                        );
-                    }
-                    #[cfg(feature = "reqwest")]
                     RequestBuilder::Reqwest(inner) => {
                         request = RequestBuilder::Reqwest(
                             inner.header("Range", range::to_string(resume, length)),
@@ -655,9 +560,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
             // Server does not support if-modified-since
             Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => {
                 let request = match client {
-                    #[cfg(feature = "isahc")]
-                    Client::Isahc(_) => RequestBuilder::Http(HttpRequest::get(&*uris[0])),
-                    #[cfg(feature = "reqwest")]
                     Client::Reqwest(client) => RequestBuilder::Reqwest(client.get(&*uris[0])),
                 };
 
@@ -691,22 +593,6 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
     }
 }
 
-#[cfg(feature = "isahc")]
-async fn head_isahc(
-    client: &IsahcClient,
-    uri: &str,
-) -> Result<Option<IsahcResponse<AsyncBody>>, Error> {
-    let request = HttpRequest::head(uri).body(()).unwrap();
-
-    match validate_isahc(client.send_async(request).await?).map(Some) {
-        result @ Ok(_) => result,
-        Err(Error::Status(StatusCode::NOT_MODIFIED))
-        | Err(Error::Status(StatusCode::NOT_IMPLEMENTED)) => Ok(None),
-        Err(other) => Err(other),
-    }
-}
-
-#[cfg(feature = "reqwest")]
 async fn head_reqwest(client: &ReqwestClient, uri: &str) -> Result<Option<ReqwestResponse>, Error> {
     let request = client.head(uri).build().unwrap();
 
@@ -725,30 +611,6 @@ async fn supports_range(
     length: Option<u64>,
 ) -> Result<bool, Error> {
     match client {
-        #[cfg(feature = "isahc")]
-        Client::Isahc(client) => {
-            let request = HttpRequest::head(uri)
-                .header("Range", range::to_string(resume, length).as_str())
-                .body(())
-                .unwrap();
-
-            let response = client.send_async(request).await?;
-
-            if response.status() == StatusCode::PARTIAL_CONTENT {
-                if let Some(header) = response.headers().get("Content-Range") {
-                    if let Ok(header) = header.to_str() {
-                        if header.starts_with(&format!("bytes {}-", resume)) {
-                            return Ok(true);
-                        }
-                    }
-                }
-
-                Ok(false)
-            } else {
-                validate_isahc(response).map(|_| false)
-            }
-        }
-        #[cfg(feature = "reqwest")]
         Client::Reqwest(client) => {
             let request = client
                 .head(uri)
@@ -775,18 +637,6 @@ async fn supports_range(
     }
 }
 
-#[cfg(feature = "isahc")]
-fn validate_isahc(response: IsahcResponse<AsyncBody>) -> Result<IsahcResponse<AsyncBody>, Error> {
-    let status = response.status();
-
-    if status.is_informational() || status.is_success() {
-        Ok(response)
-    } else {
-        Err(Error::Status(status))
-    }
-}
-
-#[cfg(feature = "reqwest")]
 fn validate_reqwest(response: ReqwestResponse) -> Result<ReqwestResponse, Error> {
     let status = response.status();
 
@@ -802,22 +652,6 @@ trait ResponseExt {
     fn last_modified(&self) -> Option<HttpDate>;
 }
 
-#[cfg(feature = "isahc")]
-impl<T> ResponseExt for IsahcResponse<T> {
-    fn content_length(&self) -> Option<u64> {
-        let header = self.headers().get("content-length")?;
-        header.to_str().ok()?.parse::<u64>().ok()
-    }
-
-    fn last_modified(&self) -> Option<HttpDate> {
-        let header = self.headers().get("last-modified")?;
-        httpdate::parse_http_date(header.to_str().ok()?)
-            .ok()
-            .map(HttpDate::from)
-    }
-}
-
-#[cfg(feature = "reqwest")]
 impl ResponseExt for ReqwestResponse {
     fn content_length(&self) -> Option<u64> {
         let header = self.headers().get("content-length")?;

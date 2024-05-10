@@ -51,40 +51,6 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
         };
 
         match &fetcher.client {
-            #[cfg(feature = "isahc")]
-            Client::Isahc(client) => {
-                // If no extra features are enabled this if-let is useless
-                #[allow(irrefutable_let_patterns)]
-                if let RequestBuilder::Http(request) = request {
-                    let request = request.body(()).expect("failed to build request");
-
-                    let req = async { client.send_async(request).await.map_err(Error::from) };
-
-                    let initial_response =
-                        crate::utils::timed_interrupt(Duration::from_secs(10), req).await?;
-
-                    if initial_response.status() == StatusCode::NOT_MODIFIED {
-                        return Ok::<_, crate::Error>((dest, file));
-                    }
-
-                    let response = validate_isahc(initial_response)?.into_body();
-
-                    fetch_loop(
-                        fetcher,
-                        file,
-                        dest,
-                        final_destination,
-                        extra,
-                        attempts,
-                        shutdown,
-                        response,
-                    )
-                    .await
-                } else {
-                    Err(crate::Error::InvalidGetRequestBuilder)
-                }
-            }
-            #[cfg(feature = "reqwest")]
             Client::Reqwest(client) =>
             {
                 #[allow(irrefutable_let_patterns)]
@@ -136,7 +102,7 @@ async fn fetch_loop<Data: Send + Sync + 'static, Response: AsyncRead + Unpin>(
     final_destination: Arc<Path>,
     extra: Arc<Data>,
     attempts: Arc<AtomicU16>,
-    shutdown: Shutdown,
+    shutdown: ShutdownManager<()>,
     mut response: Response,
 ) -> Result<(Arc<Path>, File), crate::Error> {
     let mut read_total = 0;
@@ -157,7 +123,7 @@ async fn fetch_loop<Data: Send + Sync + 'static, Response: AsyncRead + Unpin>(
 
     let fetch_loop = async {
         loop {
-            if shutdown.shutdown_started() || shutdown.shutdown_completed() {
+            if shutdown.is_shutdown_triggered() || shutdown.is_shutdown_completed() {
                 return Err(Error::Canceled);
             }
 

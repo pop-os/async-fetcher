@@ -4,7 +4,7 @@ This library provides an async service that can fetch multiple files concurrentl
 
 If the process is terminated, the downloads can be resumed. Once fetched, checksums can be validated in parallel.
 
-The HTTP client used by the fetcher is `isahc`, which is a Rust binding to `libcurl`.
+The HTTP client used by the fetcher is `reqwest`.
 
 ## License
 
