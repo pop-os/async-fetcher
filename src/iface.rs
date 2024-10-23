@@ -8,9 +8,9 @@ use std::{
 pub fn state() -> u64 {
     let mut hash = DefaultHasher::new();
 
-    if let Ok(ifaces) = ifaces::Interface::get_all() {
+    if let Ok(ifaces) = nix::ifaddrs::getifaddrs() {
         for iface in ifaces {
-            iface.addr.hash(&mut hash);
+            iface.address.hash(&mut hash);
         }
     }
 
