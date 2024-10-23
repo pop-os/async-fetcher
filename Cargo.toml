@@ -32,7 +32,7 @@ remem = "0.1.0"
 sha2 = "0.10.8"
 thiserror = "1.0.60"
 http = "1.1.0"
-ifaces = "0.1.0"
+nix = { version = "0.29.0", features = ["net"] }
 async-shutdown = "0.2.2"
 reqwest = { version = "0.12.4", features = ["stream"] }
 
