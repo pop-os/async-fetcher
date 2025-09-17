@@ -38,7 +38,7 @@ pub enum SumStrBuf {
 }
 
 impl SumStrBuf {
-    pub fn as_ref(&self) -> SumStr {
+    pub fn as_ref(&'_ self) -> SumStr<'_> {
         match self {
             SumStrBuf::Md5(string) => SumStr::Md5(string.as_str()),
             SumStrBuf::Sha256(string) => SumStr::Sha256(string.as_str()),

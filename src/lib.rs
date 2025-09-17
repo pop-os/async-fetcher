@@ -10,7 +10,10 @@
 //! - Resume a download which has been interrupted.
 //! - Progress events for fetches
 //!
-//! ```
+//! ```no_test
+//! use async_fetcher::Fetcher;
+//! use std::time::Duration;
+//!
 //! let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
 //!
 //! let shutdown = async_shutdown::ShutdownManager::new();
@@ -32,7 +35,7 @@
 //!     .build()
 //!     // Take a stream of `Source` inputs and generate a stream of fetches.
 //!     // Spawns
-//!     .stream_from(input_stream, 4)
+//!     .stream_from(input_stream, 4);
 //! ```
 
 #[macro_use]

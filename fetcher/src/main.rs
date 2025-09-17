@@ -13,9 +13,9 @@ mod interactive;
 mod machine;
 
 use async_fetcher::{Error as FetchError, *};
-use async_shutdown::Shutdown;
+use async_shutdown::ShutdownManager;
 use futures::prelude::*;
-use once_cell::sync::OnceCell;
+use is_terminal::IsTerminal;
 use std::{
     io,
     os::unix::io::{AsRawFd, FromRawFd},
@@ -26,24 +26,22 @@ use std::{
 use tokio::fs::File;
 use tokio::sync::mpsc;
 
-fn shutdown_handle() -> &'static Shutdown {
-    static SHUTDOWN: OnceCell<Shutdown> = OnceCell::new();
-    SHUTDOWN.get_or_init(Shutdown::new)
-}
-
 #[tokio::main]
 async fn main() {
     better_panic::install();
 
     let (tx, rx) = mpsc::unbounded_channel::<(Arc<Path>, Arc<Option<Checksum>>, FetchEvent)>();
 
-    if atty::is(atty::Stream::Stdout) {
+    if std::io::stdout().is_terminal() {
         interactive::run(tx, rx).await
     } else {
         machine::run(tx, rx).await
     }
 
-    shutdown_handle().wait_shutdown_complete().await;
+    ShutdownManager::<()>::new()
+        .clone()
+        .wait_shutdown_complete()
+        .await;
 }
 
 async fn execute(
@@ -70,7 +68,7 @@ async fn fetcher_stream<
 ) {
     let fetcher = Fetcher::default()
         // Add a handle to the shutdown mechanism used by this application.
-        .shutdown(crate::shutdown_handle().clone())
+        .shutdown(ShutdownManager::new())
         // Fetch each file in parts, using up to 2 concurrent connections per file
         .connections_per_file(2)
         // Pass in the event sender which events will be sent to
