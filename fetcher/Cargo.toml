@@ -1,6 +1,6 @@
 [package]
 name = "fetcher"
-version = "0.10.1"
+version = "0.12.1"
 authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
 edition = "2018"
 license = "MPL-2.0"
@@ -12,7 +12,7 @@ fomat-macros = "0.3.2"
 futures = "0.3.31"
 is-terminal = "0.4.16"
 pbr = "1.1.1"
-ron = "0.11.0"
+ron = "0.12.3"
 serde = { version = "1.0.225", features = ["derive"] }
 thiserror = "2.0.16"
 bytes = "1.10.1"

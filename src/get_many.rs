@@ -35,7 +35,7 @@ pub async fn get_many<Data: Send + Sync + 'static>(
 
                 let part_path = {
                     let mut new_filename = filename.to_os_string();
-                    new_filename.push(&[".part", partn.numtoa_str(10, &mut buf)].concat());
+                    new_filename.push([".part", partn.numtoa_str(10, &mut buf)].concat());
                     parent.join(new_filename)
                 };
 

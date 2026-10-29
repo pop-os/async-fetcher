@@ -438,7 +438,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
 
         match client {
             Client::Reqwest(client) => {
-                let head_response = head_reqwest(client, &*uris[0]).await?;
+                let head_response = head_reqwest(client, &uris[0]).await?;
 
                 if let Some(response) = head_response.as_ref() {
                     length = response
@@ -467,7 +467,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                                 return Ok(());
                             } else {
                                 error!("removing file with outdated timestamp: {:?}", to);
-                                let _ = fs::remove_file(to.as_ref())
+                                fs::remove_file(to.as_ref())
                                     .await
                                     .map_err(Error::MetadataRemove)?;
                             }
@@ -488,7 +488,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         // If set, this will use multiple connections to download a file in parts.
         if self.connections_per_file > 1 {
             if let Some(length) = length {
-                if supports_range(client, &*uris[0], resume, Some(length)).await? {
+                if supports_range(client, &uris[0], resume, Some(length)).await? {
                     self.send(|| (to.clone(), extra.clone(), FetchEvent::ContentLength(length)));
 
                     if resume != 0 {
@@ -507,9 +507,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
                     )
                     .await;
 
-                    if let Err(why) = result {
-                        return Err(why);
-                    }
+                    result?;
 
                     if let Some(modified) = modified {
                         update_modified(&to, modified)?;
@@ -533,7 +531,7 @@ impl<Data: Send + Sync + 'static> Fetcher<Data> {
         };
 
         if resume != 0 {
-            if let Ok(true) = supports_range(client, &*uris[0], resume, length).await {
+            if let Ok(true) = supports_range(client, &uris[0], resume, length).await {
                 match request {
                     RequestBuilder::Reqwest(inner) => {
                         request = RequestBuilder::Reqwest(
@@ -651,15 +649,15 @@ fn validate_reqwest(response: ReqwestResponse) -> Result<ReqwestResponse, Error>
 }
 
 trait ResponseExt {
-    fn content_length(&self) -> Option<u64>;
+    // fn content_length(&self) -> Option<u64>;
     fn last_modified(&self) -> Option<HttpDate>;
 }
 
 impl ResponseExt for ReqwestResponse {
-    fn content_length(&self) -> Option<u64> {
-        let header = self.headers().get("content-length")?;
-        header.to_str().ok()?.parse::<u64>().ok()
-    }
+    // fn content_length(&self) -> Option<u64> {
+    //     let header = self.headers().get("content-length")?;
+    //     header.to_str().ok()?.parse::<u64>().ok()
+    // }
 
     fn last_modified(&self) -> Option<HttpDate> {
         let header = self.headers().get("last-modified")?;

@@ -10,14 +10,14 @@ use std::io::copy;
 use std::{path::Path, sync::Arc};
 
 /// Accepts a stream of future file `parts` and concatenates them into the `dest` file.
-pub async fn concatenator<P: 'static>(
+pub async fn concatenator<P>(
     mut dest: File,
     mut parts: P,
     _path: Arc<Path>,
     shutdown: ShutdownManager<()>,
 ) -> Result<(), Error>
 where
-    P: Stream<Item = Result<(Arc<Path>, File), Error>> + Send + Unpin,
+    P: Stream<Item = Result<(Arc<Path>, File), Error>> + Send + Unpin + 'static,
 {
     let main = async move {
         let _token = match shutdown.delay_shutdown_token() {

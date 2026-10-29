@@ -1,7 +1,7 @@
 // Copyright 2021 System76 <info@system76.com>
 // SPDX-License-Identifier: MPL-2.0
 
-use digest::{generic_array::GenericArray, Digest, OutputSizeUser};
+use digest::{array::Array, Digest, OutputSizeUser};
 use hex::FromHex;
 use md5::Md5;
 use serde::Deserialize;
@@ -11,8 +11,8 @@ use std::{convert::TryFrom, io};
 /// A checksum of a `Source` as a fixed-sized byte array.
 #[derive(Debug, Clone)]
 pub enum Checksum {
-    Md5(GenericArray<u8, <Md5 as OutputSizeUser>::OutputSize>),
-    Sha256(GenericArray<u8, <Sha256 as OutputSizeUser>::OutputSize>),
+    Md5(Array<u8, <Md5 as OutputSizeUser>::OutputSize>),
+    Sha256(Array<u8, <Sha256 as OutputSizeUser>::OutputSize>),
 }
 
 /// An error that can occur from a failed checksum validation.
@@ -52,10 +52,10 @@ impl<'a> TryFrom<SumStr<'a>> for Checksum {
     fn try_from(input: SumStr) -> Result<Self, Self::Error> {
         match input {
             SumStr::Md5(sum) => <[u8; 16]>::from_hex(sum)
-                .map(GenericArray::from)
+                .map(Array::from)
                 .map(Checksum::Md5),
             SumStr::Sha256(sum) => <[u8; 32]>::from_hex(sum)
-                .map(GenericArray::from)
+                .map(Array::from)
                 .map(Checksum::Sha256),
         }
     }
@@ -77,7 +77,7 @@ impl Checksum {
 pub(crate) fn checksum<D: Digest, F: io::Read>(
     reader: F,
     buffer: &mut [u8],
-    expected: &GenericArray<u8, D::OutputSize>,
+    expected: &Array<u8, D::OutputSize>,
 ) -> Result<(), ChecksumError> {
     let result = generate_checksum::<D, F>(reader, buffer).map_err(ChecksumError::IO)?;
 
@@ -94,7 +94,7 @@ pub(crate) fn checksum<D: Digest, F: io::Read>(
 pub(crate) fn generate_checksum<D: Digest, F: io::Read>(
     mut reader: F,
     buffer: &mut [u8],
-) -> io::Result<GenericArray<u8, D::OutputSize>> {
+) -> io::Result<Array<u8, D::OutputSize>> {
     let mut hasher = D::new();
     let mut read;
 

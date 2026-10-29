@@ -68,7 +68,7 @@ pub(crate) async fn get<Data: Send + Sync + 'static>(
 
                     let response = validate_reqwest(initial_response)?
                         .bytes_stream()
-                        .map_err(|e| futures::io::Error::new(futures::io::ErrorKind::Other, e))
+                        .map_err(std::io::Error::other)
                         .into_async_read();
 
                     fetch_loop(

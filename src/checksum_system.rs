@@ -27,7 +27,7 @@ pub fn checksum_stream<I: Stream<Item = (Arc<Path>, Checksum)> + Send + Unpin + 
         async {
             tokio::task::spawn_blocking(move || {
                 let mut pooled_buf = pool.take();
-                let result = validate_checksum(&mut (&mut *pooled_buf).0[..], &dest, &checksum);
+                let result = validate_checksum(&mut pooled_buf.0[..], &dest, &checksum);
                 (dest, result)
             })
             .await
@@ -42,7 +42,7 @@ pub fn validate_checksum(
     dest: &Path,
     checksum: &Checksum,
 ) -> Result<(), ChecksumError> {
-    let error = match std::fs::File::open(&*dest) {
+    let error = match std::fs::File::open(dest) {
         Ok(file) => match checksum.validate(file, buf) {
             Ok(()) => return Ok(()),
             Err(why) => why,
@@ -50,7 +50,7 @@ pub fn validate_checksum(
         Err(why) => ChecksumError::from(why),
     };
 
-    let _ = std::fs::remove_file(&*dest);
+    let _ = std::fs::remove_file(dest);
     Err(error)
 }
 

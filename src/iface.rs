@@ -4,11 +4,13 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use network_interface::NetworkInterfaceConfig;
+
 /// Get the current state of network connections as a hash.
 pub fn state() -> u64 {
     let mut hash = DefaultHasher::new();
 
-    if let Ok(ifaces) = ifaces::Interface::get_all() {
+    if let Ok(ifaces) = network_interface::NetworkInterface::show() {
         for iface in ifaces {
             iface.addr.hash(&mut hash);
         }

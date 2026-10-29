@@ -17,6 +17,5 @@ pub fn date_as_timestamp(date: HttpDate) -> u64 {
 
 pub fn update_modified(to: &Arc<Path>, modified: HttpDate) -> Result<(), Error> {
     let filetime = FileTime::from_unix_time(date_as_timestamp(modified) as i64, 0);
-    filetime::set_file_times(&to, filetime, filetime)
-        .map_err(|why| Error::FileTime(to.clone(), why))
+    filetime::set_file_times(to, filetime, filetime).map_err(|why| Error::FileTime(to.clone(), why))
 }

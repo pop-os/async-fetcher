@@ -1,6 +1,6 @@
 [package]
 name = "async-fetcher"
-version = "0.12.0"
+version = "0.12.1"
 repository = "https://github.com/pop-os/async-fetcher"
 authors = ["Michael Aaron Murphy <mmstick@pm.me>"]
 description = "Asynchronous multi-connection multi-download resumable HTTP file fetching state machine"
@@ -20,21 +20,21 @@ members = ["fetcher"]
 [dependencies]
 derive_setters = "0.1.8"
 derive-new = "0.7.0"
-digest = "0.10.7"
+digest = "0.11.3"
 filetime = "0.2.26"
 futures = "0.3.31"
 hex = "0.4.3"
 httpdate = "1.0.3"
 log = "0.4.28"
-md-5 = "0.10.6"
-numtoa = "0.3.1"
+md-5 = "0.11"
+numtoa = "1.0.1"
 poolshark = "0.2.5"
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 thiserror = "2.0"
 http = "1.3.1"
-ifaces = "0.1.0"
 async-shutdown = "0.2.2"
-reqwest = { version = "0.12.23", features = ["stream"] }
+reqwest = { version = "0.13.5", features = ["stream"] }
+network-interface = "2.0.5"
 
 [dependencies.serde]
 version = "1.0.225"
